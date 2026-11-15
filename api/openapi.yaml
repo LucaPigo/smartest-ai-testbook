@@ -2,6 +2,10 @@ openapi: 3.0.3
 info:
   title: Smartest AI Testbook API
   version: 1.0.0
+  description: |
+    The API routes below are a proposed contract based on the UI. Except for
+    health, they are not yet implemented. Request and response shapes are
+    based on the Python domain model where available.
 paths:
   /health:
     get:
@@ -14,15 +18,372 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+  /api/test-suites:
+    get:
+      operationId: listTestSuites
+      responses:
+        '200':
+          description: Test suites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TestSuite'
+    post:
+      operationId: createTestSuite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestSuiteInput'
+      responses:
+        '201':
+          description: Created test suite
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestSuite'
+  /api/test-suites/{suite-id}:
+    parameters:
+      - $ref: '#/components/parameters/SuiteId'
+    put:
+      operationId: updateTestSuite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestSuiteInput'
+      responses:
+        '200':
+          description: Updated test suite
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestSuite'
+        '404':
+          description: Test suite not found
+    delete:
+      operationId: deleteTestSuite
+      responses:
+        '204':
+          description: Test suite deleted
+        '404':
+          description: Test suite not found
+  /api/test-suites/{suite-id}/test-cases:
+    parameters:
+      - $ref: '#/components/parameters/SuiteId'
+    get:
+      operationId: listSuiteTestCases
+      responses:
+        '200':
+          description: Test cases in the suite
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TestCase'
+        '404':
+          description: Test suite not found
+  /api/test-suites/{suite-id}/eval-runs:
+    parameters:
+      - $ref: '#/components/parameters/SuiteId'
+    get:
+      operationId: listSuiteEvalRuns
+      responses:
+        '200':
+          description: Evaluation runs for the suite
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EvalRun'
+        '404':
+          description: Test suite not found
+    post:
+      operationId: createEvalRun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalRunInput'
+      responses:
+        '201':
+          description: Created evaluation run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalRun'
+        '404':
+          description: Test suite not found
+  /api/test-cases:
+    post:
+      operationId: createTestCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTestCaseInput'
+      responses:
+        '201':
+          description: Created test case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestCase'
+        '404':
+          description: Test suite not found
+  /api/test-cases/{case-id}:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      operationId: getTestCase
+      responses:
+        '200':
+          description: Test case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestCase'
+        '404':
+          description: Test case not found
+    put:
+      operationId: updateTestCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestCaseInput'
+      responses:
+        '200':
+          description: Updated test case
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestCase'
+        '404':
+          description: Test case not found
+    delete:
+      operationId: deleteTestCase
+      responses:
+        '204':
+          description: Test case deleted
+        '404':
+          description: Test case not found
+  /api/test-cases/{case-id}/expectations:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      operationId: listTestCaseExpectations
+      responses:
+        '200':
+          description: Expectations for the test case
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Expectation'
+        '404':
+          description: Test case not found
+  /api/expectations:
+    post:
+      operationId: createExpectation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExpectationInput'
+      responses:
+        '201':
+          description: Created expectation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expectation'
+        '404':
+          description: Test case not found
+  /api/expectations/{expectation-id}:
+    parameters:
+      - $ref: '#/components/parameters/ExpectationId'
+    put:
+      operationId: updateExpectation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpectationInput'
+      responses:
+        '200':
+          description: Updated expectation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expectation'
+        '404':
+          description: Expectation not found
+  /api/eval-runs/{eval-run-id}:
+    parameters:
+      - $ref: '#/components/parameters/EvalRunId'
+    get:
+      operationId: getEvalRun
+      responses:
+        '200':
+          description: Evaluation run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalRun'
+        '404':
+          description: Evaluation run not found
 components:
+  parameters:
+    SuiteId:
+      name: suite-id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CaseId:
+      name: case-id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ExpectationId:
+      name: expectation-id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EvalRunId:
+      name: eval-run-id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   schemas:
     HealthResponse:
       type: object
-      required:
-        - status
+      required: [status]
       properties:
         status:
           type: string
-          enum:
-            - ok
+          enum: [ok]
       additionalProperties: false
+    TestSuiteInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+    TestSuite:
+      type: object
+      required: [id, name, tests]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        tests:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestCase'
+    TestCaseInput:
+      type: object
+      required: [prompt, goldenReference, variables, rubric, expectations]
+      properties:
+        prompt: { type: string, minLength: 1 }
+        goldenReference: { type: string, nullable: true }
+        variables:
+          type: object
+          additionalProperties: { type: string }
+        rubric: { type: string, nullable: true }
+        expectations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Expectation'
+    CreateTestCaseInput:
+      allOf:
+        - $ref: '#/components/schemas/TestCaseInput'
+        - type: object
+          required: [suite_id]
+          properties:
+            suite_id: { type: string, format: uuid, description: Suite to which the new test case is added. }
+    TestCase:
+      allOf:
+        - $ref: '#/components/schemas/TestCaseInput'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+    ExpectationInput:
+      type: object
+      required: [name, evaluator_type, threshold, options]
+      properties:
+        name: { type: string }
+        evaluator_type: { type: string }
+        threshold: { type: number }
+        options: { type: object, additionalProperties: true }
+    CreateExpectationInput:
+      allOf:
+        - $ref: '#/components/schemas/ExpectationInput'
+        - type: object
+          required: [test_case_id]
+          properties:
+            test_case_id: { type: string, format: uuid, description: Test case to which the new expectation is added. }
+    Expectation:
+      allOf:
+        - $ref: '#/components/schemas/ExpectationInput'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+    EvalRunInput:
+      type: object
+      required: [provider_name, model_name]
+      properties:
+        provider_name: { type: string }
+        model_name: { type: string }
+    EvalRun:
+      type: object
+      required: [id, suite_id, started_at, provider_name, model_name, results]
+      properties:
+        id: { type: string, format: uuid }
+        suite_id: { type: string }
+        started_at: { type: string, format: date-time }
+        provider_name: { type: string }
+        model_name: { type: string }
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvalResult'
+    EvalResult:
+      type: object
+      required: [test_id, prompt, output, error, scores, passed]
+      properties:
+        test_id: { type: string }
+        prompt: { type: string }
+        output: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+        passed: { type: boolean, readOnly: true }
+        scores:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvalScore'
+    EvalScore:
+      type: object
+      required: [feedback, passed, expectation_id, expectation_name, evaluator_type, threshold, value, scale_min, scale_max, error]
+      properties:
+        feedback: { type: string }
+        passed: { type: boolean }
+        expectation_id: { type: string, nullable: true }
+        expectation_name: { type: string, nullable: true }
+        evaluator_type: { type: string, nullable: true }
+        threshold: { type: number, nullable: true }
+        value: { type: number, nullable: true }
+        scale_min: { type: number, nullable: true }
+        scale_max: { type: number, nullable: true }
+        error: { type: string, nullable: true }
