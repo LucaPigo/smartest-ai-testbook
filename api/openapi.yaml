@@ -6,10 +6,20 @@ info:
     The API routes below are a proposed contract based on the UI. Except for
     health, they are not yet implemented. Request and response shapes are
     based on the Python domain model where available.
+tags:
+  - name: Health
+    description: Server connectivity.
+  - name: Test Creation
+    description: Manage suites, tests and their expectations.
+  - name: Execution
+    description: Create and inspect evaluation runs.
+  - name: Reporting
 paths:
+  # Health
   /health:
     get:
       operationId: getHealth
+      tags: [Health]
       summary: Check server connectivity
       responses:
         '200':
@@ -18,9 +28,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+  # Test Creation
   /api/test-suites:
     get:
       operationId: listTestSuites
+      tags: [Test Creation]
       responses:
         '200':
           description: Test suites
@@ -32,6 +44,7 @@ paths:
                   $ref: '#/components/schemas/TestSuite'
     post:
       operationId: createTestSuite
+      tags: [Test Creation]
       requestBody:
         required: true
         content:
@@ -50,6 +63,7 @@ paths:
       - $ref: '#/components/parameters/SuiteId'
     put:
       operationId: updateTestSuite
+      tags: [Test Creation]
       requestBody:
         required: true
         content:
@@ -67,6 +81,7 @@ paths:
           description: Test suite not found
     delete:
       operationId: deleteTestSuite
+      tags: [Test Creation]
       responses:
         '204':
           description: Test suite deleted
@@ -77,6 +92,7 @@ paths:
       - $ref: '#/components/parameters/SuiteId'
     get:
       operationId: listSuiteTestCases
+      tags: [Test Creation]
       responses:
         '200':
           description: Test cases in the suite
@@ -88,11 +104,13 @@ paths:
                   $ref: '#/components/schemas/TestCase'
         '404':
           description: Test suite not found
+  # Execution
   /api/test-suites/{suite-id}/eval-runs:
     parameters:
       - $ref: '#/components/parameters/SuiteId'
     get:
       operationId: listSuiteEvalRuns
+      tags: [Execution]
       responses:
         '200':
           description: Evaluation runs for the suite
@@ -106,6 +124,7 @@ paths:
           description: Test suite not found
     post:
       operationId: createEvalRun
+      tags: [Execution]
       requestBody:
         required: true
         content:
@@ -121,9 +140,11 @@ paths:
                 $ref: '#/components/schemas/EvalRun'
         '404':
           description: Test suite not found
+  # Test Creation
   /api/test-cases:
     post:
       operationId: createTestCase
+      tags: [Test Creation]
       requestBody:
         required: true
         content:
@@ -144,6 +165,7 @@ paths:
       - $ref: '#/components/parameters/CaseId'
     get:
       operationId: getTestCase
+      tags: [Test Creation]
       responses:
         '200':
           description: Test case
@@ -155,6 +177,7 @@ paths:
           description: Test case not found
     put:
       operationId: updateTestCase
+      tags: [Test Creation]
       requestBody:
         required: true
         content:
@@ -172,6 +195,7 @@ paths:
           description: Test case not found
     delete:
       operationId: deleteTestCase
+      tags: [Test Creation]
       responses:
         '204':
           description: Test case deleted
@@ -182,6 +206,7 @@ paths:
       - $ref: '#/components/parameters/CaseId'
     get:
       operationId: listTestCaseExpectations
+      tags: [Test Creation]
       responses:
         '200':
           description: Expectations for the test case
@@ -196,6 +221,7 @@ paths:
   /api/expectations:
     post:
       operationId: createExpectation
+      tags: [Test Creation]
       requestBody:
         required: true
         content:
@@ -216,6 +242,7 @@ paths:
       - $ref: '#/components/parameters/ExpectationId'
     put:
       operationId: updateExpectation
+      tags: [Test Creation]
       requestBody:
         required: true
         content:
@@ -231,11 +258,13 @@ paths:
                 $ref: '#/components/schemas/Expectation'
         '404':
           description: Expectation not found
+  # Execution
   /api/eval-runs/{eval-run-id}:
     parameters:
       - $ref: '#/components/parameters/EvalRunId'
     get:
       operationId: getEvalRun
+      tags: [Execution, Reporting]
       responses:
         '200':
           description: Evaluation run
