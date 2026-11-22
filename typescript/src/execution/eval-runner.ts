@@ -42,9 +42,12 @@ export class EvalRunner implements IEvalRunner {
           throw new Error(`Unknown evaluator type: ${expectation.evaluatorType}`);
         }
         const score = await this.evaluators[expectation.evaluatorType].evaluate(test, output, expectation);
+        if (typeof score.value !== 'number' || !Number.isFinite(score.value) || score.value < 0 || score.value > 1) {
+          throw new Error('An evaluation score must be a finite number from 0 to 1.');
+        }
         result.addScore({
-          ...score, ...metadata,
-          passed: score.error === undefined && score.value !== undefined && score.value >= metadata.threshold,
+          ...metadata, value: score.value, feedback: score.feedback, scaleMin: 0, scaleMax: 1,
+          passed: score.value >= metadata.threshold,
         });
       } catch (error) {
         result.addScore({

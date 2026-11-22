@@ -9,10 +9,10 @@ import { TestCaseBuilder, TestSuite } from '../testCreation/test-suite.js';
 async function main(): Promise<void> {
   const suite = new TestSuite('Basic answers');
   suite.addTest(new TestCaseBuilder()
+    .withTitle('Capital city')
     .withPrompt('Return exactly: Paris')
-    .withGoldenReference('Paris')
     .withExpectation({
-      id: 'exact', name: 'Exact answer', evaluatorType: 'exactMatch', threshold: 1, options: {},
+      id: 'exact', name: 'Exact answer', evaluatorType: 'exactMatch', threshold: 1, options: { expected: 'Paris' },
     })
     .build());
 

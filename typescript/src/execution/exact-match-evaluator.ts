@@ -1,18 +1,22 @@
-import type { Expectation, ITestCase } from '../testCreation/test-suite.js';
-import type { EvalScore } from './eval-run.js';
+import { validateExpectation, type Expectation, type ITestCase } from '../testCreation/test-suite.js';
+
+export interface Evaluation {
+  value: number;
+  feedback: string;
+}
 
 export interface Evaluator {
-  evaluate(test: ITestCase, output: string, expectation: Expectation): Promise<EvalScore>;
+  evaluate(test: ITestCase, output: string, expectation: Expectation): Promise<Evaluation>;
 }
 
 export class ExactMatchEvaluator implements Evaluator {
-  async evaluate(test: ITestCase, output: string, expectation: Expectation): Promise<EvalScore> {
-    const value = output === test.goldenReference ? 1 : 0;
+  async evaluate(_test: ITestCase, output: string, expectation: Expectation): Promise<Evaluation> {
+    const value = output === validateExpectation(expectation) ? 1 : 0;
     return {
-      value, scaleMin: 0, scaleMax: 1, passed: value >= expectation.threshold,
+      value,
       feedback: value === 1
-        ? 'Output matches the golden reference.'
-        : 'Output does not match the golden reference.',
+        ? 'Output matches the expected answer.'
+        : 'Output does not match the expected answer.',
     };
   }
 }
