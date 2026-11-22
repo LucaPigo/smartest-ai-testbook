@@ -13,9 +13,11 @@ Formulate the application's **core value** before proposing components or featur
 
 ## MVP scope
 
-Users create and edit a test suite, run it against an LLM provider, review outputs and their evaluations, and export suites and results as JSON. The system persists the data.
+Users create and edit a test suite, run it against an LLM provider, and review outputs and their evaluations. The system persists the data. JSON export remains a requirement for a later implementation.
 
-Tests have stable identities and can be edited, but the system does not version their contents or keep prompt snapshots. History retains the test ID and run results, not the exact configuration used in the past.
+Tests have stable identities and can be edited, but the system does not version their complete contents. Historical results retain the original prompt template, test ID, output or error, and recorded evaluation details; they are not complete snapshots of the test definition.
+
+A test contains ID, title, prompt, optional variables and expectations. Each check owns its criteria: `options.expected` for exact match and semantic similarity, or `options.rubric` for an LLM judge. The interface shows the corresponding field directly. All scores use 0–1; exact match compares strings literally with threshold fixed to 1. Each run selects one model, generates once per test, and evaluates all expectations sequentially. The runner alone applies thresholds; a test passes when generation and every expectation pass.
 
 Do not design dashboards, login, distributed queues, live reports, CI/CD, CLI, concurrency, or retry strategies: they are unnecessary to demonstrate the MVP's core value.
 
@@ -50,55 +52,63 @@ Check that the next step, required input, score scale and outcome, and provider 
 - [test-case-examples.md](./doc/test-case-examples.md): tests, evaluators, and a sample report.
 - [glossary.md](./doc/glossary.md): definitions of the project's main terms.
 
-## Run the web foundation
+## Run the Python application
 
 Specifications in `openspec/` and documents in `doc/` are shared. Implementations and their dependencies are in `typescript/` and `python/`.
 
-This foundation provides a React connection screen and interchangeable Express
-and FastAPI backends exposing `GET /health`. Domain features described in the MVP
-are not implemented in this checkout.
+The Python backend implements suite and test management, execution and recorded
+results using SQLite and SQLAlchemy. Its optional FastAPI server exposes the
+contract in [openapi.yaml](./api/openapi.yaml), and the React client provides a
+minimal workflow for creating tests, running them and reviewing results. The
+domain and persistence can also be composed without starting the server.
 
-Each backend is a small framework app and a separate entry point. Routes are
-handwritten, CORS uses standard middleware, and OpenAPI supplies TypeScript types
-and Python transport models. The HTTP server needs no handwritten classes.
+Both languages implement the same test configuration and execution behavior,
+including all three evaluation strategies. The TypeScript HTTP backend currently
+provides only `GET /health`; its HTTP and persistence parity with the Python
+application is deferred. Generated transport types do not imply endpoint
+implementation. JSON export is also deferred.
 
 Use Node 24.22.1 and Python 3.12 or later with uv. In separate terminals:
 
-1. In `typescript/`, run `npm ci` and `npm run dev` to start the API on port 3001.
-2. In `python/`, run `uv sync --locked`, then run
-   `uv run --no-sync python -m smartest_ai_testbook.web_server` to start the API on port 3002.
-3. In `web-client/`, run `npm ci`, `npm run build` and `npm start`.
+1. In `python/`, run `uv sync --locked`, then
+   `uv run --no-sync python -m smartest_ai_testbook` to start the API on port 3002.
+2. In `web-client/`, run `npm ci` and `npm run dev` (or `npm run client:web` from the repository root).
 
 Open `http://localhost:3000`. The client imports the static `configuration.js`
-module at runtime. It contains only `export const apiBaseUrl = 'http://localhost:3001';`.
-Change the URL to port 3002 in the served `web-client/dist/configuration.js` and
-reload to select Python without rebuilding. The default copied during a build
-is in `web-client/public/configuration.js`.
-Both backends default to accepting
-browser requests from `http://localhost:3000`; set `WEB_ORIGIN` for another origin.
-Runtime client configuration is public and must contain no secrets.
+module at runtime. The development server serves `web-client/public/configuration.js`
+directly; its current API address is `http://localhost:3002`. Edit that file and
+reload to switch backends. Vite updates the interface during development without
+rebuilding. To preview a production build, run `npm run build` and `npm start`
+in `web-client/`; preview serves the copied `web-client/dist/configuration.js`.
+The server accepts browser requests from `http://localhost:3000` by default;
+set `WEB_ORIGIN` for another origin. Set `OPENAI_API_KEY` in the Python backend
+environment to run a real model, and select the model in the interface.
+`OPENAI_EMBEDDING_MODEL` and `OPENAI_JUDGE_MODEL` configure the evaluator models.
+The default SQLite database is `smartest-ai-testbook.db` in the server's working
+directory; set `DATABASE_URL` to use another SQLite URL. Runtime client
+configuration is public and must contain no secrets.
 
-See [web-architecture.md](./doc/web-architecture.md) for the actual layout, commands and
-recorded verification results, and [api-generation.md](./doc/api-generation.md)
-for generator versions, ownership and safe regeneration.
+See [python/readme.md](./python/readme.md) for Python configuration,
+[web-architecture.md](./doc/web-architecture.md) for the component layout, and
+[api-generation.md](./doc/api-generation.md) for generator versions, ownership
+and safe regeneration.
 
 ## Verification and generation
 
 - At the repository root, `npm ci` installs OpenSpec and generation/browser tooling;
   `npx openspec validate --all` validates specifications.
-- In `typescript/`, `npm test` runs HTTP tests and `npm run typecheck` checks types.
+- In `typescript/`, `npm test` runs the available tests and `npm run typecheck` checks types.
 - In `python/`, after `uv sync --locked`,
-  `uv run --no-sync python -m unittest discover -s tests -v` runs HTTP tests.
-- At the root, `npm run api:setup` downloads the pinned generator (requires Java 21),
-  `npm run api:generate` regenerates all artifacts, and `npm run api:check` detects
-  stale output without writing to committed files.
+  `uv run --no-sync pytest tests -v` runs domain, persistence and HTTP tests.
+- In `web-client/`, `npm run build` checks types and builds the React client.
+- At the root (Java 21 required), `npm run api:server-node`, `npm run api:server-python`
+  and `npm run api:client-web` regenerate the artifacts of each application; review the
+  result with `git diff`.
 - With both implementations installed and the client built, `npm run verify:http`
   starts both servers and applies shared HTTP checks. `npm run verify:browser`
   also uses installed Chrome to check the same client build with both backends,
   configuration failures, connection failures and browser origin handling.
-- `npm run verify:generation` proves that regeneration preserves handwritten
-  sources and that checks reject deliberately stale output, restoring artifacts
-  afterwards. There are currently no domain test suites.
+  These checks do not verify real OpenAI model access.
 
 ## Containers
 
@@ -110,6 +120,10 @@ To use Python, change `apiBaseUrl` to `http://localhost:3002` in that file, star
 `docker compose up --build python web-client`, and reload the page. Further URL
 changes require no rebuild or container restart.
 The API URL is a browser address; use `localhost`, rather than a Compose service
-name, when opening the app locally. The two APIs can also run together.
+name, when opening the app locally. The two APIs can also run together. The current
+Compose configuration does not mount a persistent database volume or pass OpenAI
+credentials to the Python service; configure these explicitly when needed.
 
-When changing a specification, tasks must cover implementation and verification in each language and make any difference in progress explicit.
+Shared specifications target both languages and their domain implementations
+follow the same model. The Python application additionally provides the persisted
+HTTP workflow; the TypeScript HTTP server remains limited to health connectivity.

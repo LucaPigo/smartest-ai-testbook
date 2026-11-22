@@ -12,26 +12,31 @@ This project describes an MVP. Design only features needed to define a suite, ru
 
 - Users can create and edit a `TestSuite` with a name and description.
 - A suite contains one or more `TestCase` objects.
-- Each `TestCase` has a stable ID, a prompt, optional variables, and evaluation criteria (a golden reference and/or a rubric).
-- Users can configure one or more evaluators and their thresholds for a test.
+- Each `TestCase` contains a stable ID, a nonblank title and prompt, optional variables, and one or more expectations. Variables default to an empty map.
+- Each expectation contains its own ID, name, evaluator type, threshold and options. Exact and semantic checks require `options.expected`; judge checks require `options.rubric`. Criteria are nonblank strings and are not test-level fields.
+- The system rejects unsupported evaluator types or options and invalid criteria or thresholds before saving a definition.
+- The interface shows an expected-answer field for exact and semantic checks and a rubric field for judge checks, without requiring JSON options editing.
 - Tests are editable; the system does not manage test versions. Each historical result records the original prompt template, but not the complete test definition.
 
 ### FR-2 — Run a suite
 
-- Users can start a suite run by selecting a `ModelProvider`.
-- The system sends the test prompt and its variables to the provider and collects the generated output.
+- Users select one model for a suite run. The application obtains it through a `ModelProvider`.
+- Tests execute sequentially. The system sends each test's prompt and variables to the selected model once and collects one generated output.
+- All of a test's expectations evaluate that same output sequentially. Reference answers and rubrics are never part of the model-under-test input.
 - Each execution is represented by an `EvalRun` linked to the suite and its results.
 - An error on one test is recorded in its `EvalResult` and does not discard the other results in the run.
 
 ### FR-3 — Evaluate responses
 
 - Each generated output can be evaluated by one or more `Evaluator` implementations.
-- Each expectation has a threshold; its recorded outcome includes the applied threshold, pass/fail status and feedback. Successful evaluations also record a value and scale; evaluator errors are recorded as failures.
+- All evaluator values and thresholds use the 0–1 scale and must be finite. Exact-match threshold is fixed to 1; semantic and judge thresholds are configurable within 0–1.
+- Evaluators return a value and feedback. The runner alone applies `value >= threshold` and records expectation identity, the applied threshold and pass/fail status. Successful outcomes retain scale bounds 0 and 1; evaluation errors or invalid values produce failed outcomes with an error and no numeric value.
 - The MVP starts with three strategies:
-  - `ExactMatchEvaluator`: deterministic content or schema checks;
-  - `SemanticSimilarityEvaluator`: semantic similarity against the golden reference;
-  - `LlmJudgeEvaluator`: rubric-based evaluation using an LLM.
-- Individual scores retain their own scales; different scales are not assumed to be directly comparable.
+  - `ExactMatchEvaluator`: literal string equality against `options.expected`, scoring 0 or 1; differences in case, whitespace or JSON formatting fail;
+  - `SemanticSimilarityEvaluator`: semantic similarity against `options.expected`;
+  - `LlmJudgeEvaluator`: evaluation using an LLM and `options.rubric`.
+- A test passes only when generation succeeds and all its expectations pass. An evaluation failure never stops later checks or tests; a generation failure skips that test's evaluations and continues with the next test.
+- Sharing a 0–1 scale does not make different evaluation algorithms equivalent. The system does not average their values.
 
 ### FR-4 — Review the report
 
@@ -42,6 +47,7 @@ This project describes an MVP. Design only features needed to define a suite, ru
 ### FR-5 — Persistence and export
 
 - Suites, test cases, runs, and results are stored in a database.
+- Existing SQLite definitions with shared test-level criteria remain readable: the loader copies those criteria into the corresponding expectations when local options are absent. A normal save writes the new format; existing run history is preserved.
 - Users can export a suite as JSON. The export includes the suite, its tests, and the related run and result history.
 - The exported file can be stored and versioned outside the system; individual tests are not versioned inside the application.
 

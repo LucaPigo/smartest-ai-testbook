@@ -21,6 +21,7 @@ classDiagram
 
     namespace TestCreation {
         class ITestCaseBuilder {
+            +withTitle(title: String) ITestCaseBuilder
             <<interface>>
             +withPrompt(prompt: String) ITestCaseBuilder
             +build() ITestCase
@@ -33,12 +34,11 @@ classDiagram
             +addTest(test: ITestCase)
         }
         class ITestCase {
+            +title: String
             <<interface>>
             +id: String
             +prompt: String
             +variables: Map
-            +goldenReference: String?
-            +rubric: String?
             +expectations: List~Expectation~
         }
         class Expectation {
@@ -150,7 +150,7 @@ Concrete domain classes explicitly implement these contracts:
 
 ### Responsibilities and dependency direction
 
-- **Test creation:** the builder validates a test and assigns its UUID; `suite.addTest(test)` assembles the suite. `TestCase` defines input and criteria and has no `run` method. This subsystem knows no providers, runners or reports.
+- **Test creation:** the builder validates a test and assigns its UUID; `suite.addTest(test)` assembles the suite. `TestCase` defines the input and contains expectations, each with its own criteria; it has no `run` method. This subsystem knows no providers, runners or reports.
 - **Execution:** `EvalRunner` coordinates the suite. The application obtains a `Model` through `ModelProvider.getModel(modelName)` and passes it to `run(suite, model)`. For each test the runner awaits the model response, creates an `EvalResult`, awaits every configured evaluator on a successful output, adds the returned scores and stores the result in `EvalRun`. It returns the completed run and knows no report classes. `EvalRun` records execution data and provides `addResult`; it does not execute tests.
 - **Reporting:** `ReportGenerator` creates an `EvalReport` from the completed run. The report exposes the recorded results without aggregation. This subsystem knows no runner, builder or provider implementations.
 - **Exporting:** `JsonSuiteExporter` reads `ITestSuite` and its related `IEvalRun` objects and returns JSON containing the suite, tests, expectations, runs, results and scores. The caller retrieves the suite and its complete stored run history, which may be empty, and supplies them to `exportSuite`. Exporting is independent of execution and report generation and has no dependency on `EvalRunner` or `ReportGenerator`. The web interface handles downloading the returned JSON.
@@ -163,7 +163,9 @@ Each result records the prompt template used at execution time. The report copie
 
 ### Test inputs and expectations
 
-`ITestCase.variables` supplies values for placeholders in the prompt. `goldenReference` is the expected reference answer; `rubric` describes judgment criteria, for example for an LLM judge. The selected model receives the prompt and variables unchanged; its adapter handles variable substitution. Evaluators read the reference and rubric when needed. The builder checks that the selected expectations have their required criteria before creating the test.
+`ITestCase` contains only ID, title, prompt, variables and expectations. The title and prompt must not be blank. Variables supply values for placeholders in the prompt and default to an empty map. The selected model receives only the prompt and variables; its adapter handles variable substitution. Evaluation criteria belong to the expectations, so two checks of the same response can use different reference answers or rubrics.
+
+The builder validates every expectation before creating a test. A reusable validation function checks supported evaluator types, nonblank names and criteria, finite 0–1 thresholds, and exactly the options required by each evaluator. Unsupported options are rejected. No additional configuration classes or factories are needed.
 
 `Expectation` is a plain configuration record with these properties:
 
@@ -172,8 +174,14 @@ Each result records the prompt template used at execution time. The report copie
 | `id` | Stable identifier linking this check to its recorded outcome. |
 | `name` | Readable label shown in reports and exports. |
 | `evaluatorType` | Key selecting the evaluator algorithm. |
-| `threshold` | Required minimum score to pass, on the evaluator's own scale. |
-| `options` | Evaluator-specific parameters, such as a JSON schema; an empty map when unnecessary. |
+| `threshold` | Required minimum score to pass on 0–1; fixed to 1 for exact match. |
+| `options` | The required criteria for this check, in one of the forms below. |
+
+| `evaluatorType` | Required `options` | Threshold |
+|---|---|---|
+| `exactMatch` | `{ "expected": "Paris" }` | Exactly 1; literal string equality returns 0 or 1. |
+| `semanticSimilarity` | `{ "expected": "Paris" }` | A finite number from 0 to 1. |
+| `llmJudge` | `{ "rubric": "The answer contains only the city name." }` | A finite number from 0 to 1. |
 
 For example:
 
@@ -183,11 +191,11 @@ For example:
   "name": "Similarity to the reference answer",
   "evaluatorType": "semanticSimilarity",
   "threshold": 0.85,
-  "options": {}
+  "options": { "expected": "Paris" }
 }
 ```
 
-The reference answer and rubric remain on the test; options configure an individual expectation. Scale bounds belong to the returned score, not to the expectation.
+Each expectation is understandable on its own. Repeating a short reference string across two checks is acceptable and keeps their criteria independent. The interface exposes ordinary expected-answer or rubric fields according to the selected type, fixes the exact-match threshold to 1, and offers an editable threshold for the other types. Users do not edit JSON options. Embedding and judge model names are application configuration; the model under test is selected once per run.
 
 ### Recorded outcomes and pass/fail
 
@@ -197,19 +205,19 @@ The reference answer and rubric remain on the test; options configure an individ
 |---|---|
 | `EvalScore` | Expectation ID and name, evaluator type, value, scale minimum/maximum, applied threshold, pass/fail outcome, feedback and optional error. |
 
-For each expectation, the runner records its ID, name, evaluator type and applied threshold with the outcome. A successful evaluation supplies the numeric value and scale; it passes when `value >= threshold`. An evaluator error produces a failed outcome with an error message and no numeric value or scale. The runner catches that error and continues with the remaining expectations.
+Evaluators return an `Evaluation` record containing a numeric `value` and `feedback`, without deciding pass/fail. All three strategies use the 0–1 scale. The runner rejects non-finite or out-of-range values as evaluation errors, records the expectation ID, name, evaluator type and applied threshold, and alone determines success using `value >= threshold`. Successful recorded scores retain scale bounds 0 and 1 for reports and stored history. An evaluation error produces a failed outcome with an error message and no numeric value or scale. The runner catches that error and continues with the remaining expectations.
 
 A test passes only when execution succeeds and **all its expectations pass**. Every test has at least one expectation. `IEvalResult.passed` is derived from this rule, rather than set independently. A provider error fails the test and leaves its scores empty. A failed expectation never stops the remaining checks or tests.
 
 Reports and JSON exports expose each test's pass/fail outcome and clearly identify every failed expectation by ID, name and evaluator type, with its score and threshold or error message. Recorded labels and thresholds remain available even if the test definition is later edited.
 
-Each expectation outcome retains its own score and scale. The report does not calculate an overall score or aggregate results.
+Each expectation outcome retains its own score. A shared 0–1 scale does not make different algorithms equivalent; the report does not average their values, calculate an overall score or aggregate results.
 
 ## 2. Application flows
 
 ### Execution and reporting
 
-The application is the caller, for example an HTTP handler, not an additional domain class. It first prepares a suite through the creation contracts, then calls execution and reporting separately.
+The application is the caller, for example an HTTP handler, not an additional domain class. It first prepares a suite through the creation contracts, selects one model for the run, then calls execution and reporting separately. Tests and their expectations execute sequentially; each test generates exactly one response and every check evaluates that same response.
 
 ```mermaid
 sequenceDiagram
@@ -233,7 +241,7 @@ sequenceDiagram
             loop For each expectation in test.expectations
                 Note over Runner: Select evaluator by expectation.evaluatorType
                 Runner->>Evaluator: await evaluate(test, output, expectation)
-                Evaluator-->>Runner: EvalScore or evaluation error
+                Evaluator-->>Runner: Evaluation(value, feedback) or evaluation error
                 Note over Runner: Record expectation identity, threshold and pass/fail or error
                 Note over Runner: result.addScore(score), continue even after failure
             end
@@ -247,7 +255,7 @@ sequenceDiagram
     Generator-->>App: IEvalReport
 ```
 
-`EvalRunner` owns the two loops. Its public asynchronous `run` method iterates over tests and delegates each iteration to a private asynchronous `runTest` method. Evaluators receive the test definition, output and expectation, and return `Promise<EvalScore>`; they do not receive or modify an `EvalResult`. The runner awaits each evaluation, records the expectation metadata and applies the threshold rule. Rejected promises are isolated per expectation. Reporting consumes the recorded results without calling the model or repeating individual evaluations.
+`EvalRunner` owns the two loops. Its public asynchronous `run` method iterates over tests and delegates each iteration to a private asynchronous `runTest` method. Evaluators receive the test definition, output and expectation, and return `Promise<Evaluation>`; they may use the prompt and variables as context but read criteria only from that expectation. They do not receive or modify an `EvalResult`. The runner awaits each evaluation, records the expectation metadata and applies the threshold rule. Rejected promises and invalid values are isolated per expectation. Reporting consumes the recorded results without calling the model or repeating individual evaluations. There are no configurable AND/OR policies, weights, concurrency or retries.
 
 ### Independent export
 
@@ -272,6 +280,7 @@ classDiagram
     direction LR
 
     class ITestCaseBuilder {
+        +withTitle(title: String) ITestCaseBuilder
         <<interface>>
         +withPrompt(prompt: String) ITestCaseBuilder
         +build() ITestCase
@@ -301,7 +310,12 @@ classDiagram
     EvalRunner ..> Model : calls for each test
     class Evaluator {
         <<interface>>
-        +evaluate(test: ITestCase, output: String, expectation: Expectation) Promise~EvalScore~
+        +evaluate(test: ITestCase, output: String, expectation: Expectation) Promise~Evaluation~
+    }
+    class Evaluation {
+        <<record>>
+        +value: Number
+        +feedback: String
     }
     class ExactMatchEvaluator
     class SemanticSimilarityEvaluator
@@ -310,6 +324,7 @@ classDiagram
     ExactMatchEvaluator ..|> Evaluator : Strategy
     SemanticSimilarityEvaluator ..|> Evaluator : Strategy
     LlmJudgeEvaluator ..|> Evaluator : Strategy
+    Evaluator ..> Evaluation : returns value and feedback
 
 ```
 
@@ -321,6 +336,8 @@ classDiagram
 
 Every TypeScript class and every Python domain class must explicitly implement the public contracts required by [AGENTS.md](../AGENTS.md). The table lists the core contracts; strategy and adapter contracts are shown in the pattern view. Plain records are data types. Both languages implement this same model.
 
-The [execution POC](../typescript/src/execution/plan.md) implements a TypeScript-only subset to validate the domain flow: test creation, sequential execution, asynchronous exact-match evaluation and recorded outcomes. Its deterministic provider/model is test support, not an external integration. Python parity and the remaining MVP capabilities are deferred until the experiment is accepted. The POC builder exposes only prompt, golden reference and expectation setters; variables default to an empty map and rubric is optional in the test contract.
+TypeScript and Python implement the same test configuration, three evaluation strategies, fixed execution policy and reporting responsibilities. Deterministic providers used by tests are test support. The Python application also provides SQLite persistence and the suite/test/run HTTP workflow; the TypeScript HTTP server currently provides only `GET /health`. Generated transport types do not imply HTTP endpoint parity. See [web architecture](./web-architecture.md) for these supporting-code boundaries and verification scope.
+
+The SQLite loader keeps existing definitions readable by copying legacy shared reference answers and rubrics into the corresponding expectation options when a local criterion is absent. Local options take precedence. Reads do not rewrite the database; the next normal save writes only the new definition shape. Existing run rows and report snapshots are preserved.
 
 Database storage remains required for suites, tests, runs and results. The exporting subsystem owns JSON serialization through `ISuiteExporter`; HTTP delivery, file download, database details and accessors are outside this domain view.

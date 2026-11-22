@@ -1,25 +1,71 @@
 # Web architecture
 
-The shared HTTP contract is `api/openapi.yaml`. It currently exposes only
-`GET /health`, returning HTTP 200 with `{"status":"ok"}`. This checks connectivity.
-It does not check persistence, providers, evaluation or other business features.
+The shared HTTP contract is [`api/openapi.yaml`](../api/openapi.yaml). The Python
+backend implements its suite, test, expectation and evaluation-run operations,
+as well as `GET /health`. The TypeScript backend currently implements only
+`GET /health`; TypeScript HTTP and persistence parity is deferred. Both domain
+implementations support the same test configuration, three evaluator strategies
+and execution policy. The separate
+`openapi.domain.yaml` is a school exercise, not the HTTP implementation contract.
+JSON export is also deferred.
+
+`GET /health` returns HTTP 200 with `{"status":"ok"}`. It checks connectivity,
+not persistence, model access or evaluation readiness.
+
+## Python backend
+
+- [`__main__.py`](../python/src/smartest_ai_testbook/__main__.py) starts Uvicorn.
+- [`web_server/app.py`](../python/src/smartest_ai_testbook/web_server/app.py)
+  translates HTTP requests to domain operations and uses generated request models.
+- [`composition.py`](../python/src/smartest_ai_testbook/composition.py) composes the
+  repositories, runner, provider and evaluators without importing FastAPI.
+- [`persistence/sqlite.py`](../python/src/smartest_ai_testbook/persistence/sqlite.py)
+  implements the repository contracts using SQLAlchemy and SQLite. The domain
+  does not import SQLAlchemy or the web server.
+- [`web_server/generated/models/`](../python/src/smartest_ai_testbook/web_server/generated/models/)
+  contains transport models, not domain entities.
+
+Suite definitions and completed runs are saved separately. Editing or deleting a
+test does not change its recorded run results; deleting a suite also deletes its
+run history. The web server is optional: callers can use the dependencies composed
+by `create_dependencies` without starting HTTP.
+
+Definitions store reference answers in each exact or semantic expectation's
+`options.expected`, and judge criteria in each judge expectation's `options.rubric`.
+The loader also reads older rows with shared test-level criteria, copying them
+into matching expectations only when the local option is absent. Local criteria
+take precedence. Reads do not rewrite rows; the next normal save writes the new
+shape. Existing run rows and recorded outcomes are preserved.
+
+From `python/`, using Python 3.12 or later and uv:
+
+```sh
+uv sync --locked
+uv run --no-sync python -m smartest_ai_testbook
+uv run --no-sync pytest tests -v
+```
+
+The server binds to `0.0.0.0` on port 3002 by default. `PORT` changes the port;
+`WEB_ORIGIN` sets the permitted browser origin and defaults to
+`http://localhost:3000`. `DATABASE_URL` is a SQLAlchemy SQLite URL and defaults
+to `sqlite:///smartest-ai-testbook.db`; tables are created on first use.
+
+Set `OPENAI_API_KEY` in the backend environment to enable OpenAI execution.
+`OPENAI_EMBEDDING_MODEL` and `OPENAI_JUDGE_MODEL` select evaluator models and
+default to `text-embedding-3-small` and `gpt-4o-mini`. The user selects the model
+under test in the interface. Tests can inject a fake provider; real model access
+requires separately configured credentials and model access. Never put the key
+in browser-delivered configuration.
 
 ## TypeScript backend
 
-- `typescript/src/index.ts`: process entry point.
-- `typescript/src/web-server/app.ts`: Express app, standard CORS middleware and the health route.
-- `typescript/src/web-server/generated/schema.ts`: generated contract types.
-- Future domain classes belong directly in `typescript/src/` and must not import HTTP code.
+[`typescript/src/index.ts`](../typescript/src/index.ts) starts the Express app;
+[`web-server/app.ts`](../typescript/src/web-server/app.ts) provides health and
+CORS. The default port is 3001; `PORT` and `WEB_ORIGIN` configure the port and
+allowed browser origin. Generated TypeScript transport types describe the shared
+contract but do not imply implementation of its other routes.
 
-The server is supporting glue for the exercise: create the app, enable CORS,
-register the route and start listening. It needs no handwritten class, interface,
-factory or separate health handler. There are currently no domain classes or
-domain tests in either implementation.
-The handwritten app and entry point together occupy 14 lines in TypeScript and
-19 lines in Python, including imports and blank lines; generated models and tests
-are separate.
-
-From `typescript/`, using Node 24.22.1:
+From `typescript/`:
 
 ```sh
 npm ci
@@ -28,142 +74,90 @@ npm run typecheck
 npm run dev
 ```
 
-The default address is `http://localhost:3001`. `PORT` overrides the listening port
-and `WEB_ORIGIN` defaults to `http://localhost:3000`. The entry point binds to
-`0.0.0.0` for both local and container use. Configuration is read directly, without
-custom validation; invalid startup values are handled by the runtime.
+## Shared React client
 
-The standard `cors` package handles browser origin headers and preflight.
-CORS determines which browser origins can read the response; it does not reject
-ordinary HTTP requests with a custom 403. Default routing and HTTP error responses
-are left to Express.
+[`web-client/src/main.tsx`](../web-client/src/main.tsx) and
+[`TestForm.tsx`](../web-client/src/TestForm.tsx) implement a minimal interface
+using native HTML controls and the generated Fetch client. The interface manages
+suites and tests, configures expectations, submits runs and displays recorded
+results and errors. A health check uses a five-second timeout. Connecting to the
+TypeScript backend can establish health connectivity, but its missing application
+routes cannot support the Python workflow.
 
-## Python backend
+Each expectation uses native controls for its name, evaluator type and required
+criterion: an expected-answer field for exact match and semantic similarity, or
+a rubric field for an LLM judge. There are no test-wide criteria or JSON options
+editors. Exact-match threshold is fixed to 1; the other thresholds are editable
+within 0–1. Changing type submits only that type's criterion. Variables are optional.
+The user chooses the model under test once per run; evaluator models are configured
+in the backend environment. The runner generates once per test, evaluates the
+same response against all checks in order, and applies all thresholds.
 
-- `python/src/smartest_ai_testbook/web_server/__main__.py`: process entry point.
-- `python/src/smartest_ai_testbook/web_server/app.py`: FastAPI app, standard CORS middleware and the health route.
-- `python/src/smartest_ai_testbook/web_server/generated/models/`: generated transport models only.
-- Domain code belongs in `python/src/smartest_ai_testbook/` and must not import HTTP code.
+The client uses declarative React Router routes with separate pages for the suite
+list (`/test-suites`), suite creation (`/test-suites/new`), suite definition
+(`/test-suites/<suite-id>`), test editing (`/test-cases/<case-id>`), the execute page
+with report list and play control (`/execute/<suite-id>`), run configuration
+(`/execute/<suite-id>/run`) and report detail (`/reports/<run-id>`). New tests use `/test-suites/<suite-id>/test-cases/new`. The
+suite index contains no form, and the suite creation page reuses the suite edit form.
+Test and expectation management share one page. Pages follow `doc/ui.excalidraw`;
+provider and model are configured on the run configuration page when a run starts, not on the suite page.
+`BrowserRouter` uses normal browser history. Vite provides SPA fallback locally;
+the Nginx configuration serves `index.html` for application routes so direct links
+and reloads also work in the container.
 
-The route is declared directly on the app and returns a generated `HealthResponse`.
-There is no generated router, API base class or implementation discovery. The
-`CORSMiddleware` supplied by FastAPI handles browser access; routing and error
-responses use framework defaults. Transport models are not domain entities.
-
-From `python/`, using Python 3.12 or later (PowerShell):
-
-```powershell
-uv sync --locked
-uv run --no-sync python -m unittest discover -s tests -v
-uv run --no-sync python -m smartest_ai_testbook.web_server
-```
-
-uv installs the project in `.venv` in editable mode, making its package available
-without setting `PYTHONPATH`.
-The default port is 3002. `PORT`, `WEB_ORIGIN` and the fixed bind address have the
-same meaning as in TypeScript. FastAPI and Uvicorn are pinned in `pyproject.toml`, and `uv.lock`
-locks all transitive dependencies. HTTPX is a development dependency for tests.
-
-## Shared web client
-
-`web-client/src/main.tsx` contains the React connection screen.
-`web-client/src/generated/` contains the generated Fetch client.
-The UI uses that client for `GET /health` and checks that the returned status is
-`ok`. It displays connection success, connection failure or an understandable
-configuration error. A button repeats the connectivity check. Requests have a
-five-second timeout.
-
-`web-client/public/configuration.js` is a plain JavaScript module:
+[`web-client/public/configuration.js`](../web-client/public/configuration.js) is
+a public runtime module containing only the browser-accessible API address:
 
 ```js
-export const apiBaseUrl = 'http://localhost:3001';
+export const apiBaseUrl = 'http://localhost:3002';
 ```
 
-Vite copies it unchanged to `dist/configuration.js`. The application loads it
-with a runtime `import()` before constructing the generated API client.
-`@vite-ignore` keeps this import outside the bundle; `/configuration.js` resolves
-at the static site's root, even though the application bundle lives in `assets/`.
-The module contains only the API address. It is public and must contain no
-secrets. The address must be reachable by the browser.
-
-This is externalized configuration: the client uses the same implementation
-and changes its destination through configuration. Selecting an address does
-not introduce a Strategy with interchangeable behavior.
-
-From `web-client/`, in PowerShell:
-
-```powershell
-npm ci
-npm run build
-npm start
-```
-
-Open `http://localhost:3000`. `npm start` uses Vite Preview for local static hosting.
-To select Python without rebuilding, edit only the served `dist/configuration.js`
-to export `http://localhost:3002`, then reload the page. Edit the source module in
-`public/` when choosing the default for the next build. No custom server is needed.
-When using a different browser origin, set both backends' `WEB_ORIGIN` to that
-exact origin. HTTPS pages require an HTTPS API address to avoid mixed content.
-
-## Verification
-
-Install root dependencies with `npm ci`, install each backend's dependencies as
-above, and build the client. From the repository root:
+The application loads it at runtime from the site's root. The Vite development
+server serves `public/configuration.js` directly and provides live updates.
+From `web-client/`:
 
 ```sh
-node api/scripts/verify-web.mjs --http-only
-node api/scripts/verify-web.mjs
+npm ci
+npm run dev
 ```
 
-The first command starts both backends on temporary local ports and runs the same
-HTTP checks against each: health status/content, browser origin headers and
-successful GET preflight. They do not compare unspecified framework defaults
-such as 404/405 bodies, HEAD behavior or slash/case handling. The second also starts the
-Vite Preview server and uses Playwright with locally installed Chrome. Set
-`BROWSER_CHANNEL=msedge` to use installed Microsoft Edge instead.
-Each command stops its child processes after success or failure.
+Open `http://localhost:3000`, or use `npm run client:web` from the repository root.
+Edit `public/configuration.js` and reload to select another backend.
+For production preview, run `npm run build` and `npm start`: Vite copies the module
+to `dist/configuration.js` during the build, and preview serves that copy.
+Set `WEB_ORIGIN` to the exact browser origin; an HTTPS page requires an
+HTTPS API address to avoid mixed content.
 
-The browser checks cover both backends and repeat requests; unreachable backend;
-missing/invalid address; missing/malformed configuration module; and denied browser
-origin. The checks rewrite only the served `configuration.js` and compare SHA-256
-hashes of the other built files to prove the same client build was used. The
-original configuration is restored afterwards.
+## Contract generation and verification
 
-Verified locally on 2026-10-30: both shared HTTP checks and all eight browser
-scenarios pass with Node 24.22.1, Python 3.12.0 and installed Chrome. TypeScript's
-HTTP test and typechecking pass; Python's HTTP test and generated model imports pass.
-No domain suites exist in this checkout.
+From the repository root, `npm run api:server-node`, `npm run api:server-python` and
+`npm run api:client-web` generate the TypeScript backend types, the Python transport
+models and the React Fetch client. Root dependencies are installed with `npm ci`; Java is
+required for OpenAPI Generator. Generated files should be changed through the
+contract and generator, not by hand.
+
+Python's tests include domain, persistence and HTTP workflow tests with fake model
+responses. `api/scripts/verify-web.mjs` checks shared health and origin behavior;
+its browser mode also exercises runtime configuration. The React workflow test
+uses a fake API. These checks have different scopes: health checks do not prove
+that the application routes or a real OpenAI model work. Run the relevant tests
+against the current checkout before reporting their results.
+
+Verification on 2026-11-18: all 38 Python tests passed, generated artifacts
+matched the contract, and the React build passed. Browser tests covered the UI
+with a fake API and the FastAPI/SQLite workflow with a fake model, including a
+database restart. Shared health and runtime-configuration browser checks passed.
+A live OpenAI request reached the service but authentication failed, so real
+model execution remains unverified. Pytest reported collection and dependency
+deprecation warnings.
 
 ## Containers
 
-Compose builds independent TypeScript, Python and static-client images without
-mounting host dependencies into them. Nginx 1.30.6 serves the client, with
-`web-client/public/configuration.js` mounted read-only over its configuration module.
-From the root, with Docker Desktop running:
-
-```powershell
-docker compose up --build -d
-docker compose run --rm typescript npm test
-docker compose run --rm typescript npm run typecheck
-docker compose run --rm python uv run --no-sync python -m unittest discover -s tests -v
-node api/scripts/contract-check.mjs http://localhost:3001 http://localhost:3000
-node api/scripts/contract-check.mjs http://localhost:3002 http://localhost:3000
-Set-Content web-client/public/configuration.js "export const apiBaseUrl = 'http://localhost:3002';"
-docker compose stop
-```
-
-The initial client configuration defaults to TypeScript. Editing only the mounted
-module selects Python; reload `http://localhost:3000`. No image rebuild or
-container restart is needed. Change the URL back to port 3001 to restore TypeScript.
-
-Verified on 2026-10-30: the Nginx client image builds, and Chrome connects to both
-backends after changing only the mounted `configuration.js`. The compiled client
-bundle remains identical and the container keeps running throughout the switch.
-The source configuration is restored to TypeScript afterwards. The build and all
-eight local browser scenarios also pass with the runtime module.
-After the server simplification, both backend images build; their HTTP tests and
-TypeScript typechecking pass inside containers. Shared contract/CORS checks pass
-against both published ports, and Chrome connects the unchanged static client to
-each backend by changing only `configuration.js`. The original configuration is
-restored afterwards. Python uses 3.12.16 in its image. The client pins Vite 7.3.7.
-Verification services are stopped after the checks.
+[`compose.yaml`](../compose.yaml) defines independent TypeScript, Python and
+static-client services. The client configuration module is mounted read-only,
+so changing its API address and reloading the browser switches the destination
+without rebuilding the client image. The configured address selects port 3002
+for the Python workflow. The current Compose configuration does
+not mount a persistent database volume or pass OpenAI credentials to Python;
+configure these explicitly when needed. Container behavior must be verified
+against the current images and configuration.
