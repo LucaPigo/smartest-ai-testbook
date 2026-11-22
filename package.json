@@ -2,15 +2,20 @@
   "name": "smartest-ai-testbook-specs",
   "private": true,
   "scripts": {
-    "api:setup": "node api/scripts/setup-generator.mjs",
-    "api:generate": "node api/scripts/generate.mjs all",
-    "api:check": "node api/scripts/generate.mjs all --check",
+    "server:python": "uv run --project python uvicorn smartest_ai_testbook.web_server.app:app --host 0.0.0.0 --port 3002 --reload",
+    "server:node": "npm --prefix typescript run dev",
+    "client:web": "npm --prefix web-client run dev",
     "verify:http": "node api/scripts/verify-web.mjs --http-only",
     "verify:browser": "node api/scripts/verify-web.mjs",
-    "verify:generation": "node api/scripts/verify-generation.mjs"
+    "api:server-node": "openapi-typescript api/openapi.yaml -o typescript/src/web-server/generated/schema.ts",
+    "preapi:server-python": "node -e \"require('fs').rmSync('python/src/smartest_ai_testbook/web_server/generated', { recursive: true, force: true })\"",
+    "api:server-python": "openapi-generator-cli generate -i api/openapi.yaml -g python-fastapi -o python --global-property models,modelTests=false,modelDocs=false --additional-properties packageName=smartest_ai_testbook.web_server.generated,sourceFolder=src,hideGenerationTimestamp=true",
+    "preapi:client-web": "node -e \"require('fs').rmSync('web-client/src/generated', { recursive: true, force: true })\"",
+    "api:client-web": "openapi-generator-cli generate -i api/openapi.yaml -g typescript-fetch -o web-client/src/generated -t api/templates/typescript-fetch --global-property apiTests=false,modelTests=false,apiDocs=false,modelDocs=false --additional-properties supportsES6=true,withInterfaces=true,hideGenerationTimestamp=true"
   },
   "devDependencies": {
     "@fission-ai/openspec": "^1.15.0",
+    "@openapitools/openapi-generator-cli": "2.25.2",
     "openapi-typescript": "7.13.0",
     "playwright": "1.56.1"
   }

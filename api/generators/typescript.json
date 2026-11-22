@@ -1,5 +1,0 @@
-{
-  "generator": "openapi-typescript",
-  "version": "7.13.0",
-  "output": "typescript/src/web-server/generated/schema.ts"
-}

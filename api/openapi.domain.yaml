@@ -119,8 +119,8 @@ paths:
       tags: [Test Creation]
       summary: Update test inputs
       description: |
-        Expectations remain unchanged and must be compatible with the updated
-        criteria. The test ID and existing run results remain unchanged.
+        Update title, prompt and variables. Expectations, the test ID and
+        existing run results remain unchanged.
       requestBody:
         required: true
         content:
@@ -336,15 +336,15 @@ components:
               items: { $ref: '#/components/schemas/Test' }
     TestInput:
       type: object
-      required: [prompt, variables, goldenReference, rubric]
-      description: Selected evaluators may require a golden reference or rubric.
+      required: [title, prompt]
+      description: Criteria belong to each expectation, separately from the model input.
       properties:
+        title: { type: string, minLength: 1, pattern: '\S' }
         prompt: { type: string, minLength: 1 }
         variables:
           type: object
+          default: {}
           additionalProperties: { type: string }
-        goldenReference: { type: string, nullable: true }
-        rubric: { type: string, nullable: true }
     CreateTestInput:
       allOf:
         - $ref: '#/components/schemas/TestInput'
@@ -366,10 +366,14 @@ components:
       type: object
       required: [name, evaluatorType, threshold, options]
       properties:
-        name: { type: string }
-        evaluatorType: { type: string }
-        threshold: { type: number, description: Minimum passing score on the evaluator's scale. }
-        options: { type: object, additionalProperties: true }
+        name: { type: string, minLength: 1 }
+        evaluatorType: { type: string, enum: [exactMatch, semanticSimilarity, llmJudge] }
+        threshold: { type: number, minimum: 0, maximum: 1, description: 'Minimum passing score on 0–1; exact match requires 1.' }
+        options:
+          type: object
+          additionalProperties: true
+          description: 'Exactly one nonblank string: expected for exactMatch or semanticSimilarity, rubric for llmJudge. Other fields are rejected.'
+          example: { expected: Paris }
     Expectation:
       allOf:
         - $ref: '#/components/schemas/ExpectationInput'

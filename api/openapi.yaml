@@ -2,10 +2,7 @@ openapi: 3.0.3
 info:
   title: Smartest AI Testbook API
   version: 1.0.0
-  description: |
-    The API routes below are a proposed contract based on the UI. Except for
-    health, they are not yet implemented. Request and response shapes are
-    based on the Python domain model where available.
+  description: HTTP contract for the Smartest AI Testbook web application.
 tags:
   - name: Health
     description: Server connectivity.
@@ -58,6 +55,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TestSuite'
+        '422':
+          description: Invalid suite input
   /api/test-suites/{suite-id}:
     parameters:
       - $ref: '#/components/parameters/SuiteId'
@@ -79,8 +78,11 @@ paths:
                 $ref: '#/components/schemas/TestSuite'
         '404':
           description: Test suite not found
+        '422':
+          description: Invalid suite input
     delete:
       operationId: deleteTestSuite
+      description: Deletes the suite, its tests, expectations, and run history.
       tags: [Test Creation]
       responses:
         '204':
@@ -140,6 +142,8 @@ paths:
                 $ref: '#/components/schemas/EvalRun'
         '404':
           description: Test suite not found
+        '422':
+          description: Invalid provider, model, or suite configuration
   # Test Creation
   /api/test-cases:
     post:
@@ -160,6 +164,8 @@ paths:
                 $ref: '#/components/schemas/TestCase'
         '404':
           description: Test suite not found
+        '422':
+          description: Invalid test or expectation input
   /api/test-cases/{case-id}:
     parameters:
       - $ref: '#/components/parameters/CaseId'
@@ -177,6 +183,7 @@ paths:
           description: Test case not found
     put:
       operationId: updateTestCase
+      description: Replaces the test definition. Existing expectation IDs remain unchanged; historical run results are not modified.
       tags: [Test Creation]
       requestBody:
         required: true
@@ -193,6 +200,8 @@ paths:
                 $ref: '#/components/schemas/TestCase'
         '404':
           description: Test case not found
+        '422':
+          description: Invalid test or expectation input
     delete:
       operationId: deleteTestCase
       tags: [Test Creation]
@@ -237,6 +246,8 @@ paths:
                 $ref: '#/components/schemas/Expectation'
         '404':
           description: Test case not found
+        '422':
+          description: Invalid expectation input
   /api/expectations/{expectation-id}:
     parameters:
       - $ref: '#/components/parameters/ExpectationId'
@@ -258,13 +269,15 @@ paths:
                 $ref: '#/components/schemas/Expectation'
         '404':
           description: Expectation not found
+        '422':
+          description: Invalid expectation input
   # Execution
   /api/eval-runs/{eval-run-id}:
     parameters:
       - $ref: '#/components/parameters/EvalRunId'
     get:
       operationId: getEvalRun
-      tags: [Execution, Reporting]
+      tags: [Reporting]
       responses:
         '200':
           description: Evaluation run
@@ -309,38 +322,51 @@ components:
       type: object
       required: [name]
       properties:
-        name: { type: string }
+        name: { type: string, minLength: 1 }
+        description: { type: string }
     TestSuite:
       type: object
       required: [id, name, tests]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
+        description: { type: string }
         tests:
           type: array
           items:
             $ref: '#/components/schemas/TestCase'
     TestCaseInput:
       type: object
-      required: [prompt, goldenReference, variables, rubric, expectations]
+      required: [title, prompt, expectations]
       properties:
+        title: { type: string, minLength: 1, pattern: '\S' }
         prompt: { type: string, minLength: 1 }
-        goldenReference: { type: string, nullable: true }
         variables:
           type: object
+          default: {}
           additionalProperties: { type: string }
-        rubric: { type: string, nullable: true }
         expectations:
           type: array
+          minItems: 1
           items:
             $ref: '#/components/schemas/Expectation'
     CreateTestCaseInput:
-      allOf:
-        - $ref: '#/components/schemas/TestCaseInput'
-        - type: object
-          required: [suite_id]
-          properties:
-            suite_id: { type: string, format: uuid, description: Suite to which the new test case is added. }
+      type: object
+      required: [suite_id, title, prompt, expectations]
+      properties:
+        suite_id: { type: string, format: uuid, description: Suite to which the new test case is added. }
+        title: { type: string, minLength: 1, pattern: '\S' }
+        prompt: { type: string, minLength: 1 }
+        variables:
+          type: object
+          default: {}
+          additionalProperties: { type: string }
+        expectations:
+          description: Expectations created with the test case. Their IDs are assigned by the system.
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ExpectationInput'
     TestCase:
       allOf:
         - $ref: '#/components/schemas/TestCaseInput'
@@ -352,10 +378,18 @@ components:
       type: object
       required: [name, evaluator_type, threshold, options]
       properties:
-        name: { type: string }
-        evaluator_type: { type: string }
-        threshold: { type: number }
-        options: { type: object, additionalProperties: true }
+        name: { type: string, minLength: 1 }
+        evaluator_type: { type: string, enum: [exactMatch, semanticSimilarity, llmJudge] }
+        threshold:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Minimum passing score on the fixed 0–1 scale. Exact match requires 1.
+        options:
+          type: object
+          additionalProperties: true
+          description: 'Exactly one nonblank string: expected for exactMatch or semanticSimilarity, rubric for llmJudge. Other fields are rejected.'
+          example: { expected: Paris }
     CreateExpectationInput:
       allOf:
         - $ref: '#/components/schemas/ExpectationInput'

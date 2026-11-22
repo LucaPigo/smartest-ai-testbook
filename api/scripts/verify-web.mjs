@@ -76,7 +76,7 @@ try {
   const pyUrl = `http://127.0.0.1:${pyPort}`;
   const ts = start(process.execPath, ['--import', 'tsx', 'src/index.ts'], 'typescript', { PORT: String(tsPort), WEB_ORIGIN: origin });
   const python = join(root, 'python/.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
-  const py = start(python, ['-m', 'smartest_ai_testbook.web_server'], 'python', {
+  const py = start(python, ['-m', 'smartest_ai_testbook'], 'python', {
     PORT: String(pyPort), WEB_ORIGIN: origin,
   });
   await ready(`${tsUrl}/health`, ts);

@@ -5,5 +5,7 @@ __pycache__/
 .npm-cache/
 .uv-cache/
 dist/
-.api-tools/
+.openapi-generator/
+.openapi-generator-ignore
 doc-notes/
+smartest-ai-testbook.db
