@@ -1,4 +1,4 @@
-from dataclasses import replace
+import math
 from typing import Mapping, Protocol
 
 from smartest_ai_testbook.execution.eval_run import EvalResult, EvalRun, EvalScore, IEvalResult, IEvalRun
@@ -39,7 +39,11 @@ class EvalRunner(IEvalRunner):
                 if expectation.evaluator_type not in self.evaluators:
                     raise ValueError(f"Unknown evaluator type: {expectation.evaluator_type}")
                 score = await self.evaluators[expectation.evaluator_type].evaluate(test, output, expectation)
-                result.add_score(replace(score, **metadata, passed=score.error is None and score.value is not None and score.value >= expectation.threshold))
+                if (isinstance(score.value, bool) or not isinstance(score.value, (int, float))
+                        or not math.isfinite(score.value) or not 0 <= score.value <= 1):
+                    raise ValueError("An evaluation score must be a finite number from 0 to 1.")
+                result.add_score(EvalScore(**metadata, value=score.value, feedback=score.feedback,
+                                          scale_min=0, scale_max=1, passed=score.value >= metadata["threshold"]))
             except Exception as error:
                 result.add_score(EvalScore(**metadata, passed=False, feedback="Evaluation failed.", error=str(error)))
         return result

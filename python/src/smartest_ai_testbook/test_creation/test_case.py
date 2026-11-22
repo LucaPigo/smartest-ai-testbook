@@ -1,77 +1,67 @@
-from typing import Protocol
+from typing import Protocol, Self
 from uuid import UUID, uuid4
 
-from smartest_ai_testbook.test_creation.expectation import IExpectation
+from smartest_ai_testbook.test_creation.expectation import Expectation, IExpectation, validate_expectation
+
 
 class ITestCase(Protocol):
     id: UUID
+    title: str
     prompt: str
-    goldenReference: str | None
     variables: dict[str, str]
-    rubric: str | None
     expectations: list[IExpectation]
-    def __init__(
-        self,
-        prompt: str, 
-        goldenReference: str | None, 
-        variables: dict, 
-        rubric: str | None,
-        expectations: list[IExpectation]
-    ):
-        ...
+
+
+class ITestCaseBuilder(Protocol):
+    def set_title(self, title: str) -> Self: ...
+    def set_prompt(self, prompt: str) -> Self: ...
+    def set_variables(self, variables: dict[str, str]) -> Self: ...
+    def add_expectation(self, expectation: IExpectation) -> Self: ...
+    def build(self, id: UUID | None = None) -> ITestCase: ...
+
 
 class TestCase(ITestCase):
-    """Concrete implementation of a test case. Don't use this class directly, use the TestCaseBuilder instead."""
-    def __init__(self, 
-                 prompt, 
-                 goldenReference, 
-                 variables, 
-                 rubric, 
-                 expectations
-              ):
-        self.id = uuid4()
+    def __init__(self, prompt: str, variables: dict[str, str], expectations: list[IExpectation],
+                 id: UUID | None = None, *, title: str):
+        self.id = id if id is not None else uuid4()
+        self.title = title
         self.prompt = prompt
-        self.goldenReference = goldenReference
         self.variables = variables
-        self.rubric = rubric
         self.expectations = expectations
 
-class TestCaseBuilder:
-    """Builder class for creating test cases."""
-    def __init__(self):
-        self.prompt = None
-        self.goldenReference = None
-        self.variables = {}
-        self.rubric = None
-        self.expectations = []
 
-    def set_prompt(self, prompt: str):
+class TestCaseBuilder(ITestCaseBuilder):
+    def __init__(self):
+        self.title: str | None = None
+        self.prompt: str | None = None
+        self.variables: dict[str, str] = {}
+        self.expectations: list[IExpectation] = []
+
+    def set_title(self, title: str) -> Self:
+        self.title = title
+        return self
+
+    def set_prompt(self, prompt: str) -> Self:
         self.prompt = prompt
         return self
 
-    def set_golden_reference(self, goldenReference: str):
-        self.goldenReference = goldenReference
+    def set_variables(self, variables: dict[str, str]) -> Self:
+        self.variables = variables
         return self
 
-    def add_variable(self, key: str, value):
-        self.variables[key] = value
-        return self
-
-    def set_rubric(self, rubric: str):
-        self.rubric = rubric
-        return self
-
-    def add_expectation(self, expectation):
+    def add_expectation(self, expectation: IExpectation) -> Self:
         self.expectations.append(expectation)
         return self
 
-    def build(self) -> TestCase:
-        if not self.prompt:
+    def build(self, id: UUID | None = None) -> TestCase:
+        if not self.title or not self.title.strip():
+            raise ValueError("Title must be set.")
+        if not self.prompt or not self.prompt.strip():
             raise ValueError("Prompt must be set.")
-        return TestCase(
-            prompt=self.prompt,
-            goldenReference=self.goldenReference,
-            variables=self.variables,
-            rubric=self.rubric,
-            expectations=self.expectations
-        )
+        if not self.expectations:
+            raise ValueError("At least one expectation is required.")
+        for expectation in self.expectations:
+            validate_expectation(expectation)
+        expectations = [Expectation(e.name, e.evaluator_type, e.threshold, e.options.copy(), id=e.id)
+                        for e in self.expectations]
+        return TestCase(self.prompt, self.variables.copy(), expectations, id=id, title=self.title)

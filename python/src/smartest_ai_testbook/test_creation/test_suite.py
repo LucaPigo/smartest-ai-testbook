@@ -1,31 +1,25 @@
-from typing import Protocol
+from typing import Protocol, Self
 from uuid import UUID, uuid4
 
 from smartest_ai_testbook.test_creation.test_case import ITestCase
 
 
 class ITestSuite(Protocol):
-    """Describe the constructor parameters for a test suite."""
     id: UUID
     name: str
+    description: str
     tests: list[ITestCase]
-    def __init__(
-        self,
-        id: str,
-        name: str,
-        tests: list[ITestCase]
-    ):
-        ...
 
-    def add_test(self, test_case) -> 'ITestSuite':
-        ...
+    def add_test(self, test_case: ITestCase) -> Self: ...
+
 
 class TestSuite(ITestSuite):
-    def __init__(self, name: str):
-        self.id = uuid4()
+    def __init__(self, name: str, description: str = "", id: UUID | None = None):
+        self.id = id if id is not None else uuid4()
         self.name = name
-        self.tests = []
+        self.description = description
+        self.tests: list[ITestCase] = []
 
-    def add_test(self, test_case):
+    def add_test(self, test_case: ITestCase) -> Self:
         self.tests.append(test_case)
         return self
