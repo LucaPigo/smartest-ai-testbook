@@ -1,5 +1,7 @@
 # Python implementation
 
+To understand how the code is structured (architecture, domain independence, dependency injection, design patterns and order of execution), read the [lesson in `doc/`](doc/README.md).
+
 Run the following commands from this directory. Python 3.12 or later and [uv](https://docs.astral.sh/uv/) are required.
 
 Install the project and its development dependencies:
