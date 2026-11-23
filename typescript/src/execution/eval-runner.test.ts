@@ -16,6 +16,7 @@ function basicTest(prompt = 'Return exactly: Paris', expectations = [exact]) {
 }
 
 const provider: ModelProvider = {
+  providerName: 'Deterministic provider',
   getModel(modelName): Model {
     return {
       providerName: 'Deterministic provider', modelName,

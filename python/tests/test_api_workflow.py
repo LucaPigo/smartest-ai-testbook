@@ -16,6 +16,8 @@ class Model:
 
 
 class Provider:
+    provider_name = "openai"
+
     def get_model(self, model_name):
         assert model_name == "fake-model"
         return Model()
@@ -121,6 +123,51 @@ def test_nonfinite_expectation_input_is_rejected_without_partial_writes(tmp_path
         invalid_update = json.dumps(expectation).replace('"threshold": 1', '"threshold": 1e999')
         assert client.put(f"/api/expectations/{expectation_id}", content=invalid_update, headers=headers).status_code == 422
         assert client.get(f"/api/test-cases/{case_id}").json() == case
+
+
+def create_suite_with_case(client, expectations):
+    suite_id = client.post("/api/test-suites", json={"name": "Suite"}).json()["id"]
+    client.post("/api/test-cases", json={"suite_id": suite_id, "title": "Capital", "prompt": "Capital of {{country}}?",
+                                         "variables": {"country": "France"}, "expectations": expectations})
+    return suite_id
+
+
+def test_mock_mode_runs_and_stores_a_suite_without_ai_services(tmp_path):
+    dependencies = create_dependencies(f"sqlite:///{(tmp_path / 'mock.db').as_posix()}", ai_mode="mock")
+    expectations = [
+        {"name": "Exact", "evaluator_type": "exactMatch", "threshold": 1, "options": {"expected": "Paris"}},
+        {"name": "Similar", "evaluator_type": "semanticSimilarity", "threshold": 0.8, "options": {"expected": "Paris"}},
+        {"name": "Judge", "evaluator_type": "llmJudge", "threshold": 0.8, "options": {"rubric": "Names the capital."}},
+    ]
+    with TestClient(create_app(dependencies)) as client:
+        suite_id = create_suite_with_case(client, expectations)
+        runs_url = f"/api/test-suites/{suite_id}/eval-runs"
+        assert client.post(runs_url, json={"provider_name": "openai", "model_name": "demo"}).status_code == 422
+        assert client.get(runs_url).json() == []
+
+        response = client.post(runs_url, json={"provider_name": "mock", "model_name": "demo"})
+        assert response.status_code == 201
+        run = response.json()
+        assert (run["provider_name"], run["model_name"]) == ("mock", "demo")
+        result = run["results"][0]
+        assert result["output"] == "[mock] Capital of France?"
+        assert [(score["value"], score["passed"]) for score in result["scores"]] == [(0, False), (1, True), (1, True)]
+        assert [score["feedback"] for score in result["scores"][1:]] == ["Mock evaluation", "Mock evaluation"]
+        assert [stored["id"] for stored in client.get(runs_url).json()] == [run["id"]]
+
+
+def test_default_mode_rejects_providers_that_are_not_configured(tmp_path, monkeypatch):
+    monkeypatch.delenv("AI_MODE", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    url = f"sqlite:///{(tmp_path / 'providers.db').as_posix()}"
+    expectations = [{"name": "Exact", "evaluator_type": "exactMatch", "threshold": 1, "options": {"expected": "Paris"}}]
+    with make_client(url) as client:
+        suite_id = create_suite_with_case(client, expectations)
+        runs_url = f"/api/test-suites/{suite_id}/eval-runs"
+        assert client.post(runs_url, json={"provider_name": "mock", "model_name": "fake-model"}).status_code == 422
+    with TestClient(create_app(create_dependencies(url))) as client:
+        assert client.post(runs_url, json={"provider_name": "openai", "model_name": "gpt"}).status_code == 422
+        assert client.get(runs_url).json() == []
 
 
 def test_suite_description_is_optional(tmp_path):

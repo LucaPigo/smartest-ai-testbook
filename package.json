@@ -2,7 +2,7 @@
   "name": "smartest-ai-testbook-specs",
   "private": true,
   "scripts": {
-    "server:python": "uv run --project python uvicorn smartest_ai_testbook.web_server.app:app --host 0.0.0.0 --port 3002 --reload",
+    "server:python": "uv run --project python --env-file .env uvicorn smartest_ai_testbook.web_server.app:app --host 0.0.0.0 --port 3002 --reload",
     "server:node": "npm --prefix typescript run dev",
     "client:web": "npm --prefix web-client run dev",
     "verify:http": "node api/scripts/verify-web.mjs --http-only",

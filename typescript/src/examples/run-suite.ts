@@ -18,6 +18,7 @@ async function main(): Promise<void> {
 
   // Demonstration provider: no external model is called.
   const provider: ModelProvider = {
+    providerName: 'Demo provider',
     getModel(modelName) {
       return {
         providerName: 'Demo provider', modelName,

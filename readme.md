@@ -72,7 +72,14 @@ Use Node 24.22.1 and Python 3.12 or later with uv. In separate terminals:
 
 1. In `python/`, run `uv sync --locked`, then
    `uv run --no-sync python -m smartest_ai_testbook` to start the API on port 3002.
+   Alternatively, from the repository root, copy `.env.example` to `.env` once and run
+   `npm run server:python` for live reload; this script requires `.env` and loads it.
 2. In `web-client/`, run `npm ci` and `npm run dev` (or `npm run client:web` from the repository root).
+
+To try the whole workflow without real AI models, keep `AI_MODE=mock` in `.env` (as in
+the template) or set it in the backend environment, then choose the `Mock` provider on
+the run page. Both the model under test and the AI evaluators are replaced by offline
+mocks; see [python/readme.md](./python/readme.md).
 
 Open `http://localhost:3000`. The client imports the static `configuration.js`
 module at runtime. The development server serves `web-client/public/configuration.js`
@@ -123,6 +130,8 @@ The API URL is a browser address; use `localhost`, rather than a Compose service
 name, when opening the app locally. The two APIs can also run together. The current
 Compose configuration does not mount a persistent database volume or pass OpenAI
 credentials to the Python service; configure these explicitly when needed.
+Compose passes `AI_MODE` to the Python service and reads it from the root `.env`
+file, so a `.env` copied from `.env.example` starts Python in mock mode.
 
 Shared specifications target both languages and their domain implementations
 follow the same model. The Python application additionally provides the persisted

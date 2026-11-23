@@ -193,8 +193,10 @@ def create_app(dependencies: Dependencies | None = None) -> FastAPI:
     @app.post("/api/test-suites/{suite_id}/eval-runs", status_code=201)
     async def create_run(suite_id: UUID, data: EvalRunInput):
         suite = find_suite(deps().suites, suite_id)
-        provider = deps().provider  # None when no OpenAI key is configured
-        if data.provider_name != "openai" or not data.model_name.strip() or provider is None:
+        # The configured provider: OpenAI, the mock (AI_MODE=mock) or None without an OpenAI key.
+        # Only a run for the configured provider is accepted.
+        provider = deps().provider
+        if provider is None or data.provider_name != provider.provider_name or not data.model_name.strip():
             raise HTTPException(status_code=422, detail="Unknown provider or unavailable model configuration")
         try:
             run = await deps().runner.run(suite, provider.get_model(data.model_name))

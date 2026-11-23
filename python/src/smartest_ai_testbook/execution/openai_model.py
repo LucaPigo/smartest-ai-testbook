@@ -1,9 +1,8 @@
-import re
 from typing import Mapping
 
 from openai import OpenAIError
 
-from smartest_ai_testbook.execution.model import Model, ModelProvider
+from smartest_ai_testbook.execution.model import Model, ModelProvider, fill_variables
 
 
 class OpenAIModel(Model):
@@ -14,7 +13,7 @@ class OpenAIModel(Model):
         self.model_name = model_name
 
     async def generate_response(self, prompt: str, variables: Mapping[str, str]) -> str:
-        prompt = re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", lambda match: variables.get(match[1], match[0]), prompt)
+        prompt = fill_variables(prompt, variables)
         try:
             response = await self.client.responses.create(model=self.model_name, input=prompt)
         except OpenAIError:
@@ -25,6 +24,8 @@ class OpenAIModel(Model):
 
 
 class OpenAIProvider(ModelProvider):
+    provider_name = "openai"
+
     def __init__(self, client):
         self.client = client
 

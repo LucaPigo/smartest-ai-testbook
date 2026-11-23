@@ -54,6 +54,7 @@ classDiagram
     namespace Execution {
         class ModelProvider {
             <<interface>>
+            +providerName: String
             +getModel(modelName: String) Model
         }
         class Model {
@@ -154,6 +155,22 @@ Concrete domain classes explicitly implement these contracts:
 - **Execution:** `EvalRunner` coordinates the suite. The application obtains a `Model` through `ModelProvider.getModel(modelName)` and passes it to `run(suite, model)`. For each test the runner awaits the model response, creates an `EvalResult`, awaits every configured evaluator on a successful output, adds the returned scores and stores the result in `EvalRun`. It returns the completed run and knows no report classes. `EvalRun` records execution data and provides `addResult`; it does not execute tests.
 - **Reporting:** `ReportGenerator` creates an `EvalReport` from the completed run. The report exposes the recorded results without aggregation. This subsystem knows no runner, builder or provider implementations.
 - **Exporting:** `JsonSuiteExporter` reads `ITestSuite` and its related `IEvalRun` objects and returns JSON containing the suite, tests, expectations, runs, results and scores. The caller retrieves the suite and its complete stored run history, which may be empty, and supplies them to `exportSuite`. Exporting is independent of execution and report generation and has no dependency on `EvalRunner` or `ReportGenerator`. The web interface handles downloading the returned JSON.
+
+### AI integration points
+
+An AI service is involved at exactly two points:
+
+1. **System under test (SUT):** during a run, the runner calls the selected `Model` once per test to generate the response.
+2. **AI evaluation service:** only `semanticSimilarity` (embeddings) and `llmJudge` (a judge model) call an AI service while evaluating an expectation. `exactMatch` is a literal comparison and never needs one.
+
+Both points are reached only through domain contracts (`ModelProvider`/`Model` and `Evaluator`), so the application chooses their implementations at startup. Besides the OpenAI adapters, both languages provide deterministic offline mocks for validating the flow without real models:
+
+| Point | Contract | Real implementation | Mock implementation |
+|---|---|---|---|
+| SUT | `ModelProvider`, `Model` | `OpenAIProvider`, `OpenAIModel` | `MockProvider` (`providerName` `mock`), `MockModel`: answers `[mock] ` followed by the prompt with its variables filled in |
+| AI evaluation | `Evaluator` | `SemanticSimilarityEvaluator`, `LlmJudgeEvaluator` | `MockEvaluator`: validates the expectation, then returns value 1 and feedback `Mock evaluation` |
+
+In mock mode both points are replaced together; `exactMatch` keeps its real behavior, so it normally fails on mock answers while the AI expectations pass. Mocks check the flow, not the quality of the results.
 
 The application supplies available evaluators to the runner, keyed by evaluator type. An `Expectation` describes a configured check; an `Evaluator` is the algorithm that performs it. The runner selects that algorithm through the `evaluatorType` property. An expectation neither creates nor depends on evaluator implementations. Multiple expectations may use the same evaluator type with different parameters.
 
@@ -290,6 +307,7 @@ classDiagram
 
     class ModelProvider {
         <<interface>>
+        +providerName: String
         +getModel(modelName: String) Model
     }
     class Model {
@@ -302,9 +320,11 @@ classDiagram
     class ProviderAPI {
         <<external>>
     }
+    class MockModel
     ModelProvider ..> Model : supplies selected model
     ProviderAdapter ..|> Model : Adapter
     ProviderAdapter --> ProviderAPI : calls SUT
+    MockModel ..|> Model : offline SUT
 
     class EvalRunner
     EvalRunner ..> Model : calls for each test
@@ -320,10 +340,12 @@ classDiagram
     class ExactMatchEvaluator
     class SemanticSimilarityEvaluator
     class LlmJudgeEvaluator
+    class MockEvaluator
     EvalRunner ..> Evaluator : selects by expectation.evaluatorType
     ExactMatchEvaluator ..|> Evaluator : Strategy
     SemanticSimilarityEvaluator ..|> Evaluator : Strategy
     LlmJudgeEvaluator ..|> Evaluator : Strategy
+    MockEvaluator ..|> Evaluator : offline Strategy
     Evaluator ..> Evaluation : returns value and feedback
 
 ```
@@ -331,12 +353,13 @@ classDiagram
 - **Builder:** create a valid test before adding it to the suite. Optional setters are omitted; a suite needs no builder of its own.
 - **Adapter:** translate the external provider API into `Model`, supplied by `ModelProvider`. The selected model is the **SUT (System Under Test)**. A provider selects a model; it does not forward generation calls.
 - **Strategy:** evaluator implementations vary the evaluation algorithm while the runner keeps the same loop. No factory or resolver class is needed.
+- **Mocks:** `MockModel`/`MockProvider` and `MockEvaluator` are further implementations of the same contracts. They replace the SUT and the AI evaluation service without changing the runner.
 
 ## Implementation boundaries
 
 Every TypeScript class and every Python domain class must explicitly implement the public contracts required by [AGENTS.md](../AGENTS.md). The table lists the core contracts; strategy and adapter contracts are shown in the pattern view. Plain records are data types. Both languages implement this same model.
 
-TypeScript and Python implement the same test configuration, three evaluation strategies, fixed execution policy and reporting responsibilities. Deterministic providers used by tests are test support. The Python application also provides SQLite persistence and the suite/test/run HTTP workflow; the TypeScript HTTP server currently provides only `GET /health`. Generated transport types do not imply HTTP endpoint parity. See [web architecture](./web-architecture.md) for these supporting-code boundaries and verification scope.
+TypeScript and Python implement the same test configuration, three evaluation strategies, mock SUT and mock evaluator, fixed execution policy and reporting responsibilities. Deterministic providers used by tests are test support. The Python application also provides SQLite persistence and the suite/test/run HTTP workflow; the TypeScript HTTP server currently provides only `GET /health`. Generated transport types do not imply HTTP endpoint parity. See [web architecture](./web-architecture.md) for these supporting-code boundaries and verification scope.
 
 The SQLite loader keeps existing definitions readable by copying legacy shared reference answers and rubrics into the corresponding expectation options when a local criterion is absent. Local options take precedence. Reads do not rewrite the database; the next normal save writes only the new definition shape. Existing run rows and report snapshots are preserved.
 

@@ -11,6 +11,7 @@ services:
       - "3002:3002"
     environment:
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      AI_MODE: ${AI_MODE:-}
   web-client:
     build: ./web-client
     ports:

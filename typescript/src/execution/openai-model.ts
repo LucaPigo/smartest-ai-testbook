@@ -1,5 +1,5 @@
 import OpenAI, { OpenAIError } from 'openai';
-import type { Model, ModelProvider } from './model.js';
+import { fillVariables, type Model, type ModelProvider } from './model.js';
 
 export class OpenAIModel implements Model {
   readonly providerName = 'openai';
@@ -7,8 +7,7 @@ export class OpenAIModel implements Model {
   constructor(private readonly client: OpenAI, readonly modelName: string) {}
 
   async generateResponse(prompt: string, variables: Readonly<Record<string, string>>): Promise<string> {
-    const input = prompt.replace(/\{\{\s*([^{}]+?)\s*\}\}/g,
-      (match, name: string) => Object.hasOwn(variables, name) ? variables[name] : match);
+    const input = fillVariables(prompt, variables);
     let response;
     try {
       response = await this.client.responses.create({ model: this.modelName, input });
@@ -24,6 +23,8 @@ export class OpenAIModel implements Model {
 }
 
 export class OpenAIProvider implements ModelProvider {
+  readonly providerName = 'openai';
+
   constructor(private readonly client: OpenAI) {}
 
   getModel(modelName: string): Model {

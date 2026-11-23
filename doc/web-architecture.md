@@ -57,13 +57,26 @@ under test in the interface. Tests can inject a fake provider; real model access
 requires separately configured credentials and model access. Never put the key
 in browser-delivered configuration.
 
+An AI service is used at two points: the system under test during a run, and the
+AI evaluation service for semantic-similarity and LLM-judge expectations (see
+[domain design](./domain-design.md#ai-integration-points)). Set `AI_MODE=mock` to
+replace both with deterministic offline mocks at startup; no OpenAI key is needed
+or used. The mock provider is named `mock`, its model answers `[mock] ` followed
+by the filled prompt, and the AI expectations receive score 1 with feedback
+`Mock evaluation`; exact match stays real. A run is accepted only when its
+requested provider matches the configured one: `openai` in default mode with a
+key, `mock` in mock mode. Otherwise the server answers 422. The run page offers
+the `OpenAI` and `Mock` providers.
+
 ## TypeScript backend
 
 [`typescript/src/index.ts`](../typescript/src/index.ts) starts the Express app;
 [`web-server/app.ts`](../typescript/src/web-server/app.ts) provides health and
 CORS. The default port is 3001; `PORT` and `WEB_ORIGIN` configure the port and
 allowed browser origin. Generated TypeScript transport types describe the shared
-contract but do not imply implementation of its other routes.
+contract but do not imply implementation of its other routes. The TypeScript
+domain provides the same mock provider, model and evaluator as Python, but has no
+composition module or `AI_MODE` handling, because its HTTP server does not run suites.
 
 From `typescript/`:
 

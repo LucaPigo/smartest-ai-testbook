@@ -42,6 +42,7 @@ export function RunConfigPage() {
   const { suiteId } = useParams();
   const { api, suites, loaded } = useOutletContext<AppContext>();
   const suite = suites.find(item => item.id === suiteId);
+  const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -54,7 +55,7 @@ export function RunConfigPage() {
     if (!suiteId) return;
     setBusy(true); setError('');
     try {
-      const run = await api.execution.createEvalRun({ suiteId, evalRunInput: { providerName: 'openai', modelName: model } });
+      const run = await api.execution.createEvalRun({ suiteId, evalRunInput: { providerName: provider, modelName: model } });
       if (active.current) navigate(`/reports/${run.id}`);
     } catch (reason) { const message = await errorMessage(reason); if (active.current) setError(message); }
     finally { if (active.current) setBusy(false); }
@@ -67,7 +68,10 @@ export function RunConfigPage() {
     <section>
       {error && <p role="alert" className="error">{error}</p>}
       <form onSubmit={event => void start(event)}>
-        <label>Provider <select value="openai" disabled><option value="openai">OpenAI</option></select></label>
+        <label>Provider <select value={provider} onChange={e => setProvider(e.target.value)}>
+          <option value="openai">OpenAI</option>
+          <option value="mock">Mock</option>
+        </select></label>
         <fieldset>
           <legend>Configure model provider</legend>
           <label>Model <input required value={model} onChange={e => setModel(e.target.value)} placeholder="Model name" /></label>
