@@ -5,11 +5,13 @@ How a request flows through this file:
 2. FastAPI finds the function registered for that method and path (a "route").
 3. FastAPI reads and validates the input (path parameters and JSON body) and
    passes it to the function as normal Python arguments.
-4. The function uses the domain objects to do the work and returns a value.
+4. The function calls one operation of a domain application service, which finds,
+   changes and saves the data, and returns its result.
 5. FastAPI converts the returned value to JSON and sends it back.
 
-The routes contain only HTTP logic. The real work is done by the domain classes,
-and small reusable helpers live in `helpers.py`.
+The routes contain only HTTP logic. The real work is done by the application services
+(TestCatalog and RunService, created in composition.py), and small HTTP helpers live
+in `helpers.py`.
 """
 
 import os
@@ -20,7 +22,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from smartest_ai_testbook.composition import Dependencies, create_dependencies
-from smartest_ai_testbook.test_creation.test_suite import TestSuite
 # Input models generated from the OpenAPI contract (api/). They are Pydantic classes:
 # FastAPI uses them to check that the request body has the expected fields and types.
 from smartest_ai_testbook.web_server.generated.models.create_expectation_input import CreateExpectationInput
@@ -31,8 +32,7 @@ from smartest_ai_testbook.web_server.generated.models.health_response import Hea
 from smartest_ai_testbook.web_server.generated.models.test_case_input import TestCaseInput
 from smartest_ai_testbook.web_server.generated.models.test_suite_input import TestSuiteInput
 from smartest_ai_testbook.web_server.helpers import (
-    build_case, case_json, expectation_json, find_case, find_expectation, find_suite,
-    invalid_request, new_expectation, run_json, suite_json,
+    case_json, domain_error, expectation_json, invalid_request, new_expectation, or_404, run_json, suite_json,
 )
 
 
@@ -47,6 +47,9 @@ def create_app(dependencies: Dependencies | None = None) -> FastAPI:
     # When the request body is invalid, FastAPI raises RequestValidationError and
     # answers with status 422. We replace the default handler with our own (see helpers.py).
     app.add_exception_handler(RequestValidationError, invalid_request)
+    # When a service rejects input that breaks a domain rule, it raises ValueError.
+    # This handler turns it into the same 422 response for every route (see helpers.py).
+    app.add_exception_handler(ValueError, domain_error)
 
     # CORS: browsers block calls from a web page to a server on another origin
     # (here the web client on port 3000 calls this server on another port).
@@ -74,8 +77,12 @@ def create_app(dependencies: Dependencies | None = None) -> FastAPI:
     # - An argument typed with a Pydantic model (e.g. `data: TestSuiteInput`) is
     #   read from the JSON body and validated.
     #
-    # `status_code=` sets the status of a successful response (default 200 OK).
-    # `raise HTTPException(...)` stops the function and returns an error status.
+    # Every route does only three things: read the HTTP input, call ONE operation of an
+    # application service (deps().catalog or deps().runs), and translate the outcome:
+    # - a result → JSON (with `status_code=` for a success other than 200 OK);
+    # - None / False (not found) → 404, through `or_404` or `HTTPException`;
+    # - a ValueError raised by the domain → 422, through the `domain_error` handler.
+    # Finding, validating and saving data is the job of the services, not of the routes.
 
     # Health
 
@@ -89,129 +96,91 @@ def create_app(dependencies: Dependencies | None = None) -> FastAPI:
     @app.get("/api/test-suites")
     def list_suites():
         # Returning a list of dicts is enough: FastAPI turns it into JSON.
-        return [suite_json(suite) for suite in deps().suites.list()]
+        return [suite_json(suite) for suite in deps().catalog.list_suites()]
 
     @app.post("/api/test-suites", status_code=201)  # 201 Created
     def create_suite(data: TestSuiteInput):
-        suite = TestSuite(data.name, data.description or "")
-        deps().suites.save(suite)
-        return suite_json(suite)
+        return suite_json(deps().catalog.create_suite(data.name, data.description or ""))
 
     @app.put("/api/test-suites/{suite_id}")
     def update_suite(suite_id: UUID, data: TestSuiteInput):
-        suite = find_suite(deps().suites, suite_id)  # 404 if it does not exist
-        suite.name, suite.description = data.name, data.description or ""
-        deps().suites.save(suite)
-        return suite_json(suite)
+        suite = deps().catalog.update_suite(suite_id, data.name, data.description or "")
+        return suite_json(or_404(suite, "Suite not found"))
 
     @app.delete("/api/test-suites/{suite_id}", status_code=204)
     def delete_suite(suite_id: UUID):
-        if not deps().suites.delete(suite_id):
+        if not deps().catalog.delete_suite(suite_id):
             raise HTTPException(status_code=404, detail="Suite not found")
         # 204 No Content: success, with an empty response body.
         return Response(status_code=204)
 
     # Test cases
-    # Test cases are stored inside their suite, so every change saves the whole suite.
 
     @app.get("/api/test-suites/{suite_id}/test-cases")
     def list_cases(suite_id: UUID):
-        return [case_json(case) for case in find_suite(deps().suites, suite_id).tests]
+        cases = or_404(deps().catalog.list_test_cases(suite_id), "Suite not found")
+        return [case_json(case) for case in cases]
 
     @app.post("/api/test-cases", status_code=201)
     def create_case(data: CreateTestCaseInput):
-        suite = find_suite(deps().suites, data.suite_id)
-        case = build_case(data, [new_expectation(e) for e in data.expectations])
-        suite.add_test(case)
-        deps().suites.save(suite)
-        return case_json(case)
+        # Translate each input expectation into a domain Expectation (with a new ID).
+        case = deps().catalog.add_test_case(data.suite_id, data.title, data.prompt, data.variables,
+                                            [new_expectation(e) for e in data.expectations])
+        return case_json(or_404(case, "Suite not found"))
 
     @app.get("/api/test-cases/{case_id}")
     def get_case(case_id: UUID):
-        # find_case returns (suite, index, case); [2] takes the case.
-        return case_json(find_case(deps().suites, case_id)[2])
+        return case_json(or_404(deps().catalog.get_test_case(case_id), "Test case not found"))
 
     @app.put("/api/test-cases/{case_id}")
     def update_case(case_id: UUID, data: TestCaseInput):
-        suite, index, old_case = find_case(deps().suites, case_id)
-        # The client may keep, change or remove existing expectations, but it may not
-        # repeat an ID or use an ID that belongs to another test case.
-        existing_ids = {item.id for item in old_case.expectations}
-        input_ids = [item.id for item in data.expectations]
-        if len(input_ids) != len(set(input_ids)) or not set(input_ids).issubset(existing_ids):
-            raise HTTPException(status_code=422, detail="Expectation IDs must belong to this test case")
-        # Build a new test case with the same ID and put it in place of the old one.
-        case = build_case(data, [new_expectation(e, e.id) for e in data.expectations], id=case_id)
-        suite.tests[index] = case
-        deps().suites.save(suite)
-        return case_json(case)
+        # Existing expectations keep their IDs; the catalog checks that they belong to this test case.
+        case = deps().catalog.update_test_case(case_id, data.title, data.prompt, data.variables,
+                                               [new_expectation(e, e.id) for e in data.expectations])
+        return case_json(or_404(case, "Test case not found"))
 
     @app.delete("/api/test-cases/{case_id}", status_code=204)
     def delete_case(case_id: UUID):
-        suite, index, _ = find_case(deps().suites, case_id)
-        suite.tests.pop(index)
-        deps().suites.save(suite)
+        if not deps().catalog.delete_test_case(case_id):
+            raise HTTPException(status_code=404, detail="Test case not found")
         return Response(status_code=204)
 
     # Expectations
-    # Expectations live inside a test case, so a change rebuilds that test case.
 
     @app.get("/api/test-cases/{case_id}/expectations")
     def list_expectations(case_id: UUID):
-        return [expectation_json(e) for e in find_case(deps().suites, case_id)[2].expectations]
+        expectations = or_404(deps().catalog.list_expectations(case_id), "Test case not found")
+        return [expectation_json(e) for e in expectations]
 
     @app.post("/api/expectations", status_code=201)
     def create_expectation(data: CreateExpectationInput):
-        suite, index, case = find_case(deps().suites, data.test_case_id)
-        expectation = new_expectation(data)
-        # Rebuild the test case with the old expectations plus the new one.
-        suite.tests[index] = build_case(case, [*case.expectations, expectation], id=case.id)
-        deps().suites.save(suite)
-        return expectation_json(expectation)
+        expectation = deps().catalog.add_expectation(data.test_case_id, new_expectation(data))
+        return expectation_json(or_404(expectation, "Test case not found"))
 
     @app.put("/api/expectations/{expectation_id}")
     def update_expectation(expectation_id: UUID, data: ExpectationInput):
-        suite, case, index = find_expectation(deps().suites, expectation_id)
-        expectation = new_expectation(data, expectation_id)
-        # Replace one expectation in a copy of the list, then rebuild the test case.
-        expectations = case.expectations.copy()
-        expectations[index] = expectation
-        suite.tests[suite.tests.index(case)] = build_case(case, expectations, id=case.id)
-        deps().suites.save(suite)
-        return expectation_json(expectation)
+        expectation = deps().catalog.update_expectation(expectation_id, new_expectation(data))
+        return expectation_json(or_404(expectation, "Expectation not found"))
 
     # Evaluation runs
 
     @app.get("/api/test-suites/{suite_id}/eval-runs")
     def list_runs(suite_id: UUID):
-        find_suite(deps().suites, suite_id)  # only to answer 404 if the suite does not exist
-        return [run_json(run) for run in deps().runs.list(suite_id)]
+        runs = or_404(deps().runs.list_runs(suite_id), "Suite not found")
+        return [run_json(run) for run in runs]
 
     # This route is `async` because running a suite calls the AI model over the network.
     # While it `await`s the answer, the server can handle other requests.
     # The other routes are plain functions: FastAPI runs them in a separate thread.
     @app.post("/api/test-suites/{suite_id}/eval-runs", status_code=201)
     async def create_run(suite_id: UUID, data: EvalRunInput):
-        suite = find_suite(deps().suites, suite_id)
-        # The configured provider: OpenAI, the mock (AI_MODE=mock) or None without an OpenAI key.
-        # Only a run for the configured provider is accepted.
-        provider = deps().provider
-        if provider is None or data.provider_name != provider.provider_name or not data.model_name.strip():
-            raise HTTPException(status_code=422, detail="Unknown provider or unavailable model configuration")
-        try:
-            run = await deps().runner.run(suite, provider.get_model(data.model_name))
-        except ValueError as error:
-            # Turn a domain error into an HTTP error the client can understand.
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        deps().runs.save(run)
-        return run_json(run)
+        # The run service checks the provider, runs the suite and saves the completed run.
+        run = await deps().runs.run_suite(suite_id, data.provider_name, data.model_name)
+        return run_json(or_404(run, "Suite not found"))
 
     @app.get("/api/eval-runs/{run_id}")
     def get_run(run_id: UUID):
-        run = deps().runs.get(run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Evaluation run not found")
-        return run_json(run)
+        return run_json(or_404(deps().runs.get_run(run_id), "Evaluation run not found"))
 
     return app
 

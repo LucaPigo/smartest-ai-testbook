@@ -142,7 +142,7 @@ flowchart LR
   (`TestSuite`, `TestCase`, `Expectation`, `EvalRun`, …), strings back into UUIDs.
   `_suite` also reads older definitions saved with shared criteria and moves them into the expectations, without rewriting the stored row.
 
-The rest of the application never sees a `SuiteRow`: routes and tests call `deps().suites.save(suite)` and `deps().suites.get(id)` and receive domain objects.
+The rest of the application never sees a `SuiteRow`: the application services call `self.suites.save(suite)` and `self.suites.get(id)` on the repository they received and get domain objects back. The routes do not touch repositories at all: they call the services.
 
 ## 7. Testing
 
@@ -164,7 +164,7 @@ dependencies = create_dependencies(url)
 | How are tables created? | `Base.metadata.create_all` at startup, if missing. |
 | How is data saved? | A short session with a transaction; `merge` inserts or updates. |
 | Where is SQLAlchemy used? | Only in `persistence/sqlite.py`. |
-| Who sees it? | Nobody else: the domain and the routes only see `SuiteRepository` and `RunRepository`. |
+| Who sees it? | Nobody else: the application services only see `SuiteRepository` and `RunRepository`, and the routes only see the services. |
 
 ---
 

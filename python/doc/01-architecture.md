@@ -83,6 +83,23 @@ TypeScript or Java.
 > A fourth subsystem, **exporting** (a suite and its runs as JSON), is part of the
 > [domain design](../../doc/domain-design.md) but is not implemented yet.
 
+## Application services: where the use cases live
+
+Entities such as `TestSuite` or `EvalRun` describe data and rules, but they never save
+themselves. Each **use case** of the application ("add a test case", "update an
+expectation", "run a suite") is an operation of an **application service**: a domain
+class that finds the objects through repositories, changes them through the entities and
+the builder, and saves the result.
+
+| Service | File | Use cases |
+|---|---|---|
+| `TestCatalog` | [`test_creation/test_catalog.py`](../src/smartest_ai_testbook/test_creation/test_catalog.py) | suites, test cases and expectations: list, create, read, update, delete |
+| `RunService` | [`execution/run_service.py`](../src/smartest_ai_testbook/execution/run_service.py) | start a run, list the runs of a suite, read a run |
+
+The services are the **single entry point** to the domain for every caller: the web
+server, the tests, or a future command-line tool all call the same operations and get the
+same rules. Reporting has no service because it only reads completed runs.
+
 ## The direction of dependencies
 
 This is the most important picture of the lesson. An arrow `A → B` means
@@ -109,7 +126,8 @@ flowchart TD
 
 Look at where the arrows go: **every arrow points towards the domain, none leaves it.**
 
-- The web server knows the domain, but the domain does not know the web server.
+- The web server knows the domain, but the domain does not know the web server. The
+  routes call only the application services and translate their results into HTTP.
 - The SQLite repositories know the domain, but the domain does not know SQLite.
 - Only `composition.py` knows "everybody", because its job is to connect them.
 

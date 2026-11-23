@@ -16,7 +16,7 @@ domain never imports it ([chapter 2](02-domain-independence.md)).
 | Route | A function bound to an HTTP method and a path. | every `@app.get/post/put/delete` in `app.py` |
 | Pydantic model | A class describing the shape of a JSON body; used for validation. | `web_server/generated/models/` |
 | `HTTPException` | An exception that becomes an HTTP error response. | `helpers.py`, `app.py` |
-| Exception handler | A function that turns an exception type into a response. | `invalid_request` in `helpers.py` |
+| Exception handler | A function that turns an exception type into a response. | `invalid_request` and `domain_error` in `helpers.py` |
 | Middleware | Code that runs around every request. | `CORSMiddleware` in `create_app` |
 | Uvicorn | The server that receives HTTP connections and calls FastAPI. | `__main__.py` |
 | `TestClient` | Sends requests to the app in tests, without a real server. | `tests/test_api_workflow.py` |
@@ -41,8 +41,11 @@ A route is registered with a decorator naming the HTTP method and the path:
 ```python
 @app.get("/api/test-suites")
 def list_suites():
-    return [suite_json(suite) for suite in deps().suites.list()]
+    return [suite_json(suite) for suite in deps().catalog.list_suites()]
 ```
+
+Each route calls one operation of an application service (`deps().catalog` or
+`deps().runs`) and translates the result: the use case itself lives in the domain.
 
 | Decorator | HTTP method | Used for | Example |
 |---|---|---|---|
@@ -118,14 +121,22 @@ raise HTTPException(status_code=404, detail="Suite not found")
 
 # 2. Register a handler that turns an exception type into a response
 app.add_exception_handler(RequestValidationError, invalid_request)
+app.add_exception_handler(ValueError, domain_error)
 ```
 
 `RequestValidationError` is what FastAPI raises when Pydantic validation fails. The
 project replaces the default handler only to keep the response valid JSON when the
 input contains numbers such as `NaN` or `Infinity`.
 
-Domain errors (`ValueError`) are not HTTP errors: helpers such as `build_case` catch them
-and re-raise them as `HTTPException(422)`. This translation happens only in `web_server/`.
+The application services do not know HTTP, so they report outcomes in plain Python:
+
+| Service outcome | Translated by | HTTP response |
+|---|---|---|
+| a result | the route, with a `*_json` helper | 200 / 201 + JSON |
+| `None` (not found) | `or_404(result, "...")`, which raises `HTTPException` | 404 `{"detail": "..."}` |
+| `ValueError` (broken domain rule) | the `domain_error` handler, registered once for every route | 422 `{"detail": "<message>"}` |
+
+This translation happens only in `web_server/`.
 
 ## 7. Middleware: CORS
 
@@ -143,7 +154,7 @@ grant this permission. The allowed origin comes from `WEB_ORIGIN`.
 | Route type | How FastAPI runs it | Used in the project for |
 |---|---|---|
 | `def` | in a thread pool, so blocking code does not stop the server | all CRUD routes (database access is synchronous) |
-| `async def` | on the event loop; it can `await` | `create_run`, which awaits `EvalRunner.run` and the model calls |
+| `async def` | on the event loop; it can `await` | `create_run`, which awaits `RunService.run_suite` and, through it, the model calls |
 
 Inside an `async def` route never call slow blocking code: it would freeze every other request.
 
@@ -161,8 +172,9 @@ def deps():
     return app.state.dependencies
 ```
 
-This keeps one composition root (`create_dependencies`) for the web server and for code
-that does not use HTTP.
+`Dependencies` holds the two application services, so routes use `deps().catalog` and
+`deps().runs`. This keeps one composition root (`create_dependencies`) for the web server
+and for code that does not use HTTP.
 
 ## 10. Free documentation
 

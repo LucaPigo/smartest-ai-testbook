@@ -6,7 +6,7 @@ infrastructure (the details).
 
 ## Suggested reading order
 
-Each step lists the files and what to look for. The whole domain is about 500 lines.
+Each step lists the files and what to look for. The whole domain is about 750 lines.
 
 ### Step 1 — The vocabulary (`test_creation/`)
 
@@ -16,6 +16,7 @@ Each step lists the files and what to look for. The whole domain is about 500 li
 | [`test_case.py`](../src/smartest_ai_testbook/test_creation/test_case.py) | `TestCase` (just data) and `TestCaseBuilder` (the **Builder**, with all the rules in `build()`). |
 | [`test_suite.py`](../src/smartest_ai_testbook/test_creation/test_suite.py) | `TestSuite` and `add_test`. |
 | [`repository.py`](../src/smartest_ai_testbook/test_creation/repository.py) | `SuiteRepository`: an interface with no implementation here. Ask yourself: who implements it? |
+| [`test_catalog.py`](../src/smartest_ai_testbook/test_creation/test_catalog.py) | `TestCatalog`, the **application service**: one method per use case (find, change with the Builder, save through `SuiteRepository`), and the rule on expectation IDs. |
 
 ### Step 2 — Running and evaluating (`execution/`)
 
@@ -29,6 +30,7 @@ Each step lists the files and what to look for. The whole domain is about 500 li
 | [`semantic_similarity_evaluator.py`](../src/smartest_ai_testbook/execution/semantic_similarity_evaluator.py), [`llm_judge_evaluator.py`](../src/smartest_ai_testbook/execution/llm_judge_evaluator.py) | The other two strategies. Skim them: the interesting part is that they have the same `evaluate` signature. |
 | [`mock_ai.py`](../src/smartest_ai_testbook/execution/mock_ai.py) | The offline mocks of the two AI integration points: `MockModel`/`MockProvider` (the SUT) and `MockEvaluator` (the AI evaluation service). Compare them with the OpenAI classes: same interfaces, no network. |
 | [`repository.py`](../src/smartest_ai_testbook/execution/repository.py) | `RunRepository`. |
+| [`run_service.py`](../src/smartest_ai_testbook/execution/run_service.py) | `RunService`, the application service for runs: provider check, runner call, saving the run. |
 
 ### Step 3 — Reports (`reporting/`)
 
@@ -40,22 +42,24 @@ Each step lists the files and what to look for. The whole domain is about 500 li
 
 | File | Look for |
 |---|---|
-| [`composition.py`](../src/smartest_ai_testbook/composition.py) | The **composition root**: every concrete class is chosen and connected here. Find each object you met in steps 1–3. |
+| [`composition.py`](../src/smartest_ai_testbook/composition.py) | The **composition root**: every concrete class is chosen and injected into the two application services here. Find each object you met in steps 1–3. |
 
 ### Step 5 — The infrastructure
 
 | File | Look for |
 |---|---|
 | [`persistence/sqlite.py`](../src/smartest_ai_testbook/persistence/sqlite.py) | The two tables (`SuiteRow`, `RunRow`), the repositories and the conversions `_suite` / `_run`. |
-| [`web_server/app.py`](../src/smartest_ai_testbook/web_server/app.py) | `create_app`, `deps()` and the routes grouped by resource. Every route is short: it delegates to helpers and domain objects. |
-| [`web_server/helpers.py`](../src/smartest_ai_testbook/web_server/helpers.py) | Translations between HTTP and domain (`*_json`, `build_case`, `new_expectation`) and lookups that answer 404. |
+| [`web_server/app.py`](../src/smartest_ai_testbook/web_server/app.py) | `create_app`, `deps()` and the routes grouped by resource. Every route calls one service operation and translates its outcome. |
+| [`web_server/helpers.py`](../src/smartest_ai_testbook/web_server/helpers.py) | Translations between HTTP and domain: `domain_error` (ValueError → 422), `or_404` (None → 404), `*_json`, `new_expectation`. No business rules. |
 | [`__main__.py`](../src/smartest_ai_testbook/__main__.py) | Four lines that start Uvicorn. |
 
 ### Step 6 — The tests (`tests/`)
 
 Tests are executable documentation. Start with
 [`test_composition.py`](../tests/test_composition.py) (the whole application without
-HTTP, plus the independence check) and
+HTTP, plus the independence check),
+[`test_test_catalog.py`](../tests/test_test_catalog.py) and
+[`test_run_service.py`](../tests/test_run_service.py) (every use case and rule, without HTTP) and
 [`test_api_workflow.py`](../tests/test_api_workflow.py) (the HTTP workflow with a fake
 model). Notice how fakes are injected.
 
@@ -90,6 +94,7 @@ Try to answer without looking, then check in the code.
 8. Which classes would change if we replaced SQLite with PostgreSQL? Which would not?
 9. What are the two points where the application calls an AI service? Which expectation type never needs one?
 10. Which file changes behavior when `AI_MODE=mock` is set, and which classes are unaware of it?
+11. Where is the rule "expectation IDs must belong to this test case" checked? Why is it not in the HTTP route, and why not in `TestSuite` with a `save()` method?
 
 ## Exercises
 

@@ -24,9 +24,7 @@ class Provider:
 
 
 def make_client(database_url):
-    dependencies = create_dependencies(database_url)
-    dependencies.provider = Provider()
-    return TestClient(create_app(dependencies))
+    return TestClient(create_app(create_dependencies(database_url, provider=Provider())))
 
 
 def test_http_workflow_persists_snapshots_and_checks_boundaries(tmp_path):

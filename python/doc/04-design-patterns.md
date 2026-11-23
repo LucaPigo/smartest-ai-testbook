@@ -13,6 +13,7 @@ For each pattern in this code we look at three things: the **problem**, the
 | [Strategy](#strategy) | Choose the evaluation algorithm at run time. | `Evaluator` and its three implementations |
 | [Adapter](#adapter) | Use the OpenAI API through our own `Model` interface. | `OpenAIModel` |
 | [Repository](#repository) | Save and load domain objects without knowing the database. | `SuiteRepository`, `RunRepository` |
+| [Application service](#application-service) | Give each use case one place, usable by any caller. | `TestCatalog`, `RunService` |
 | [Composition root + DI](#composition-root-and-dependency-injection) | Create and connect all objects in one place. | `composition.py` |
 | [Interfaces as contracts](#interfaces-as-contracts) | Let parts collaborate without knowing each other's classes. | every `Protocol` |
 
@@ -59,7 +60,8 @@ def build(self, id: UUID | None = None) -> TestCase:
 does not change a test case that was already built.
 
 **Where.** [`test_creation/test_case.py`](../src/smartest_ai_testbook/test_creation/test_case.py).
-The web server uses it in `build_case` ([`web_server/helpers.py`](../src/smartest_ai_testbook/web_server/helpers.py)).
+`TestCatalog` uses it every time it creates or changes a test case
+([`test_creation/test_catalog.py`](../src/smartest_ai_testbook/test_creation/test_catalog.py)).
 
 ---
 
@@ -185,9 +187,10 @@ implementation lives in the infrastructure (see the Dependency Inversion Princip
 [chapter 2](02-domain-independence.md#technique-1--the-domain-declares-interfaces-for-what-it-needs)).
 
 ```python
-# A route only sees the collection-like interface
-suite = deps().suites.get(suite_id)
-deps().suites.save(suite)
+# test_creation/test_catalog.py: the service only sees the collection-like interface
+suite = self.suites.get(suite_id)
+suite.name, suite.description = name, description
+self.suites.save(suite)
 ```
 
 Inside, `SQLAlchemySuiteRepository` converts a `TestSuite` into a `SuiteRow` (the test
@@ -197,6 +200,53 @@ editing a test later does not change results already recorded.
 **Where.** Interfaces in [`test_creation/repository.py`](../src/smartest_ai_testbook/test_creation/repository.py)
 and [`execution/repository.py`](../src/smartest_ai_testbook/execution/repository.py);
 implementation in [`persistence/sqlite.py`](../src/smartest_ai_testbook/persistence/sqlite.py).
+
+---
+
+## Application service
+
+**Problem.** A use case such as "update a test case" is a sequence: find the test inside
+its suite, check that the new expectation IDs belong to it, rebuild it with the Builder,
+put it back and save the suite. If this sequence lives in an HTTP route, any other caller
+(a test, a script, a command-line tool) must repeat it, and the rules end up duplicated
+or forgotten. Saving inside the entities (`suite.save()`, the *Active Record* pattern)
+is no better: the entities would depend on the database.
+
+**Solution.** An *application service* is a domain class with one operation per use case.
+It receives the repositories (and, for runs, the runner and the provider) by dependency
+injection, coordinates the entities and saves the result. Entities stay simple and
+persistence-ignorant; routes become pure translation.
+
+```mermaid
+flowchart LR
+    R["HTTP route<br/>(or a test, a script)"] -- "update_test_case(...)" --> S["TestCatalog"]
+    S -- "list / save" --> Repo["SuiteRepository"]
+    S -- "build(...)" --> B["TestCaseBuilder"]
+```
+
+```python
+# test_creation/test_catalog.py (simplified)
+def update_test_case(self, case_id, title, prompt, variables, expectations):
+    found = self._find_case(case_id)
+    if found is None:
+        return None                                     # the caller decides: 404, message, ...
+    suite, index, old_case = found
+    existing_ids = {item.id for item in old_case.expectations}   # a business rule, now in the domain
+    input_ids = [item.id for item in expectations]
+    if len(input_ids) != len(set(input_ids)) or not set(input_ids).issubset(existing_ids):
+        raise ValueError("Expectation IDs must belong to this test case")
+    case = _build_case(title, prompt, variables, expectations, id=old_case.id)   # the Builder validates
+    suite.tests[index] = case
+    self.suites.save(suite)                             # the Repository saves
+    return case
+```
+
+Each service has a `Protocol` contract (`ITestCatalog`, `IRunService`). Outcomes stay
+simple: `None` (or `False` for a delete) means "not found", `ValueError` means "invalid".
+
+**Where.** [`test_creation/test_catalog.py`](../src/smartest_ai_testbook/test_creation/test_catalog.py)
+and [`execution/run_service.py`](../src/smartest_ai_testbook/execution/run_service.py);
+created in `composition.py`, used by `web_server/app.py` and `tests/test_composition.py`.
 
 ---
 
@@ -227,6 +277,8 @@ explicitly implements a `Protocol` that describes its public contract:
 | `Evaluator` | `ExactMatchEvaluator`, `SemanticSimilarityEvaluator`, `LLMJudgeEvaluator`, `MockEvaluator` |
 | `Model`, `ModelProvider` | `OpenAIModel`, `OpenAIProvider`, `MockModel`, `MockProvider` |
 | `SuiteRepository`, `RunRepository` | `SQLAlchemySuiteRepository`, `SQLAlchemyRunRepository` |
+| `ITestCatalog` | `TestCatalog` |
+| `IRunService` | `RunService` |
 
 Collaborators always refer to the contract, not to the class: for example,
 `EvalRunner.run` accepts any `ITestSuite` and any `Model`. This is what lets the
@@ -241,7 +293,7 @@ are not domain classes with a contract:
 - `Evaluation` — what an evaluator returns (`value`, `feedback`);
 - `EvalScore` — the recorded outcome of one expectation;
 - `ReportResult` — one row of a report;
-- `Dependencies` — the container returned by the composition root.
+- `Dependencies` — the container of the two application services, returned by the composition root.
 
 ---
 

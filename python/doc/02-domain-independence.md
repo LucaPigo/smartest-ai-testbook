@@ -125,15 +125,23 @@ if not self.prompt or not self.prompt.strip():
     raise ValueError("Prompt must be set.")
 ```
 
-The domain does not know about HTTP, so it cannot say "422". The web server
-translates the error at the border:
+The application services let these errors pass through, and add their own for rules that
+involve stored data (for example "Expectation IDs must belong to this test case"). When an
+item does not exist, a service simply returns `None`.
+
+The domain does not know about HTTP, so it cannot say "422" or "404". The web server
+translates both outcomes at the border:
 
 ```python
 # web_server/helpers.py
-try:
-    return builder.build(id=id)
-except ValueError as error:
-    raise HTTPException(status_code=422, detail=str(error)) from error
+async def domain_error(_request, error):          # registered for ValueError in app.py
+    return JSONResponse(status_code=422, content={"detail": str(error)})
+
+
+def or_404(result, detail):                       # used by the routes
+    if result is None:
+        raise HTTPException(status_code=404, detail=detail)
+    return result
 ```
 
 ### Technique 4 — The program can run without the web server
@@ -148,8 +156,10 @@ subprocess.run([sys.executable, "-c", "import sys; import smartest_ai_testbook.c
                 "assert 'smartest_ai_testbook.web_server.app' not in sys.modules"], check=True)
 ```
 
-The same test creates a suite, runs it and reads the result back **without any HTTP**.
-If someone accidentally made the domain depend on the web server, this test would fail.
+The same test creates a suite, runs it and reads the result back **without any HTTP**,
+through the application services; another test checks that the same rules apply. If
+someone accidentally made the domain depend on the web server, or moved a rule back into
+a route, these tests would fail.
 
 ## Two levels of validation
 
@@ -159,7 +169,7 @@ it is checked twice, by two different layers with two different jobs:
 | Layer | Checks | Example error |
 |---|---|---|
 | **Web server** (Pydantic models) | The *shape* of the message: required fields, types. | `title` is missing, `threshold` is not a number. |
-| **Domain** (`TestCaseBuilder`, `validate_expectation`) | The *rules* of the problem. | Blank title, no expectations, exact match with threshold ≠ 1. |
+| **Domain** (`TestCaseBuilder`, `validate_expectation`, the application services) | The *rules* of the problem. | Blank title, no expectations, exact match with threshold ≠ 1, an expectation ID of another test. |
 
 The domain rules are checked even when the web server is not used, so they can never
 be bypassed.

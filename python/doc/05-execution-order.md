@@ -53,7 +53,8 @@ Every route calls `deps()`. The first time, `app.state.dependencies` is `None`, 
 1. `create_database(url)` creates the SQLAlchemy engine and the tables if they do not exist;
 2. if `AI_MODE=mock`, the mock provider and mock evaluator are chosen; otherwise, if
    `OPENAI_API_KEY` is set, an OpenAI client is created;
-3. the evaluators, the repositories, the runner and the provider are created and connected.
+3. the evaluators, the repositories, the runner and the provider are created and injected
+   into the two application services, `TestCatalog` and `RunService`.
 
 From the second request on, `deps()` returns the same objects.
 
@@ -76,10 +77,9 @@ sequenceDiagram
     actor Client as Browser
     participant F as FastAPI
     participant R as create_case (route)
-    participant H as helpers
-    participant B as TestCaseBuilder
-    participant S as TestSuite
+    participant C as TestCatalog
     participant Repo as SQLAlchemySuiteRepository
+    participant B as TestCaseBuilder
 
     Client->>F: POST /api/test-cases (JSON)
     Note over F: Find the route for POST /api/test-cases<br/>Validate JSON with CreateTestCaseInput
@@ -87,23 +87,24 @@ sequenceDiagram
         F-->>Client: 422 (invalid_request handler)
     end
     F->>R: create_case(data)
-    R->>H: find_suite(suites, data.suite_id)
-    H->>Repo: get(suite_id)
-    Repo-->>H: TestSuite or None
+    Note over R: new_expectation(e) for each input expectation
+    R->>C: add_test_case(suite_id, title, prompt, variables, expectations)
+    C->>Repo: get(suite_id)
+    Repo-->>C: TestSuite or None
     alt suite not found
-        H-->>Client: 404 (HTTPException)
+        C-->>R: None
+        R-->>Client: 404 (or_404)
     end
-    R->>H: build_case(data, [new_expectation(e), ...])
-    H->>B: set_title, set_prompt, set_variables, add_expectation
-    H->>B: build()
+    C->>B: set_title, set_prompt, set_variables, add_expectation, build()
     Note over B: Check domain rules
-    alt rule broken (ValueError)
-        H-->>Client: 422 (HTTPException)
+    alt rule broken
+        B-->>Client: ValueError → 422 (domain_error handler)
     end
-    B-->>R: TestCase
-    R->>S: add_test(case)
-    R->>Repo: save(suite)
-    R->>H: case_json(case)
+    B-->>C: TestCase
+    Note over C: suite.add_test(case)
+    C->>Repo: save(suite)
+    C-->>R: TestCase
+    Note over R: case_json(case)
     R-->>F: dict
     F-->>Client: 201 + JSON
 ```
@@ -114,20 +115,22 @@ Step by step:
 2. **Shape validation.** The argument `data: CreateTestCaseInput` tells FastAPI to read
    the JSON body and validate it with that Pydantic model. If a field is missing or has
    the wrong type, the route is not even called: the client gets `422`.
-3. **Lookup.** `find_suite` asks the repository for the suite; if it does not exist, it
-   raises `HTTPException(404)`.
-4. **Transport → domain.** `new_expectation` turns each input expectation into a domain
+3. **Transport → domain.** `new_expectation` turns each input expectation into a domain
    `Expectation`.
-5. **Domain validation.** `build_case` uses the **Builder**. If a domain rule is broken,
-   `build()` raises `ValueError`, which `build_case` translates into `422`.
-6. **Domain operation.** `suite.add_test(case)` adds the test to the suite.
-7. **Persistence.** `suites.save(suite)` stores the whole suite (test cases are stored
-   inside their suite).
-8. **Domain → transport.** `case_json` turns the test case into a dict; FastAPI sends it
-   as JSON with status `201 Created`.
+4. **Use case.** The route calls `catalog.add_test_case(...)`. From here on everything
+   happens in the domain:
+   - the catalog asks the repository for the suite; if it does not exist, it returns `None`;
+   - it builds the test case with the **Builder**, which raises `ValueError` if a domain
+     rule is broken;
+   - it adds the test to the suite and **saves** the whole suite (test cases are stored
+     inside their suite).
+5. **Outcome → HTTP.** `None` becomes `404` through `or_404`; a `ValueError` becomes `422`
+   through the `domain_error` handler; a test case becomes a dict through `case_json`,
+   which FastAPI sends as JSON with status `201 Created`.
 
-Every other CRUD route follows the same shape: *validate → find → build or change domain
-objects → save → serialise*.
+Every other route follows the same shape: *validate the shape → call one service
+operation → translate the outcome*. Finding, building, checking rules and saving all
+happen inside the service.
 
 ## 3. The main use case: running a suite
 
@@ -137,18 +140,30 @@ The browser sends `POST /api/test-suites/{suite_id}/eval-runs` with
 ### In the web server
 
 ```python
-# web_server/app.py — create_run (simplified)
-suite = find_suite(deps().suites, suite_id)                 # 404 if missing
-provider = deps().provider                                  # OpenAI, mock, or None without an API key
-if provider is None or data.provider_name != provider.provider_name or not data.model_name.strip():
-    raise HTTPException(422, ...)                           # only the configured provider is accepted
-run = await deps().runner.run(suite, provider.get_model(data.model_name))
-deps().runs.save(run)
-return run_json(run)
+# web_server/app.py — create_run
+run = await deps().runs.run_suite(suite_id, data.provider_name, data.model_name)
+return run_json(or_404(run, "Suite not found"))
 ```
 
 The route is `async def` because running a suite waits for the network many times.
 While a route is waiting at an `await`, the server can serve other requests.
+
+### In the domain: `RunService.run_suite`
+
+```python
+# execution/run_service.py
+suite = self.suites.get(suite_id)
+if suite is None:
+    return None                                         # → 404
+if self.provider is None or provider_name != self.provider.provider_name or not model_name.strip():
+    raise ValueError("Unknown provider or unavailable model configuration")   # → 422
+run = await self.runner.run(suite, self.provider.get_model(model_name))
+self.runs.save(run)                                     # saved only when the run completes
+return run
+```
+
+The service receives the configured provider (OpenAI, the mock, or `None` without an API
+key) from the composition root, and accepts only runs for that provider.
 
 ### In the domain: `EvalRunner.run`
 
@@ -158,7 +173,7 @@ It contains **two nested loops**: over the tests, and for each test over its exp
 
 ```mermaid
 sequenceDiagram
-    participant Route as create_run
+    participant Route as RunService
     participant Runner as EvalRunner
     participant Model as Model (OpenAIModel)
     participant Ev as Evaluator (strategy)
@@ -230,10 +245,10 @@ records:
 The sequence of calls is exactly the same as with real models: this is what the mocks
 are for. They validate the flow, not the results.
 
-### Back in the web server
+### Back in the service and the web server
 
-`deps().runs.save(run)` stores the run in its own table, then `run_json(run)` serialises
-it and FastAPI answers `201 Created`. The browser shows each test, its output, the score
+`RunService` saves the completed run in its own table (`self.runs.save(run)`) and returns
+it; the route serialises it with `run_json(run)` and FastAPI answers `201 Created`. The browser shows each test, its output, the score
 of every expectation and whether it passed.
 
 ### And the reporting subsystem?
@@ -249,10 +264,10 @@ directly with `run_json`.
 flowchart LR
     A["HTTP request"] --> B["FastAPI<br/>routing + Pydantic validation"]
     B --> C["Route in app.py"]
-    C --> D["helpers.py<br/>find / build / translate"]
+    C --> D["Application service<br/>TestCatalog / RunService"]
     D --> E["Domain objects<br/>Builder, Suite, Runner, Strategies"]
-    E --> F["Repository<br/>SQLite"]
-    C --> G["helpers.py<br/>*_json"]
+    D --> F["Repository<br/>SQLite"]
+    C --> G["helpers.py<br/>or_404, *_json"]
     G --> H["HTTP response (JSON)"]
 ```
 

@@ -16,9 +16,12 @@ not persistence, model access or evaluation readiness.
 
 - [`__main__.py`](../python/src/smartest_ai_testbook/__main__.py) starts Uvicorn.
 - [`web_server/app.py`](../python/src/smartest_ai_testbook/web_server/app.py)
-  translates HTTP requests to domain operations and uses generated request models.
+  translates HTTP requests to calls of the domain application services
+  (`TestCatalog`, `RunService`) and their outcomes to status codes, using the
+  generated request models. Routes hold no lookups or business rules.
 - [`composition.py`](../python/src/smartest_ai_testbook/composition.py) composes the
-  repositories, runner, provider and evaluators without importing FastAPI.
+  repositories, runner, provider and evaluators into the two application services,
+  without importing FastAPI.
 - [`persistence/sqlite.py`](../python/src/smartest_ai_testbook/persistence/sqlite.py)
   implements the repository contracts using SQLAlchemy and SQLite. The domain
   does not import SQLAlchemy or the web server.
@@ -27,8 +30,8 @@ not persistence, model access or evaluation readiness.
 
 Suite definitions and completed runs are saved separately. Editing or deleting a
 test does not change its recorded run results; deleting a suite also deletes its
-run history. The web server is optional: callers can use the dependencies composed
-by `create_dependencies` without starting HTTP.
+run history. The web server is optional: callers can use the application services composed
+by `create_dependencies` without starting HTTP, with the same rules and outcomes.
 
 Definitions store reference answers in each exact or semantic expectation's
 `options.expected`, and judge criteria in each judge expectation's `options.rubric`.
@@ -77,6 +80,8 @@ allowed browser origin. Generated TypeScript transport types describe the shared
 contract but do not imply implementation of its other routes. The TypeScript
 domain provides the same mock provider, model and evaluator as Python, but has no
 composition module or `AI_MODE` handling, because its HTTP server does not run suites.
+It also has no application services or repository contracts: these exist only in
+Python, by decision of the project owner.
 
 From `typescript/`:
 

@@ -45,7 +45,13 @@ The same idea appears throughout the code:
 | `EvalRunner.run(suite, model)` | the `Model` to test | an OpenAI client |
 | `SQLAlchemySuiteRepository` | a database `engine` | its own database connection |
 | `OpenAIModel`, `LLMJudgeEvaluator`, … | an OpenAI `client` | the client |
-| `create_app(dependencies)` | a `Dependencies` container | repositories, runner, provider |
+| `TestCatalog` | a `SuiteRepository` | its own database access |
+| `RunService` | the two repositories, the runner and the provider | any of them |
+| `create_app(dependencies)` | a `Dependencies` container with the two services | the services |
+
+The application services show the point of the whole technique: `TestCatalog` saves
+suites, but it only knows the `SuiteRepository` interface it received. It does not know
+SQLite exists.
 
 ## The composition root
 
@@ -55,7 +61,7 @@ project that someone is a single function, `create_dependencies` in
 application assembles its objects is called the **composition root**.
 
 ```python
-def create_dependencies(database_url=None, client=None, ai_mode=None) -> Dependencies:
+def create_dependencies(database_url=None, client=None, ai_mode=None, provider=None) -> Dependencies:
     # 1. Database
     engine = create_database(database_url or os.getenv("DATABASE_URL", "sqlite:///smartest-ai-testbook.db"))
 
@@ -63,11 +69,11 @@ def create_dependencies(database_url=None, client=None, ai_mode=None) -> Depende
     evaluators: dict[str, Evaluator] = {"exactMatch": ExactMatchEvaluator()}
 
     # 3. The two AI integration points: the SUT provider and the AI evaluators
-    provider = None
+    configured_provider = None
     if (ai_mode or os.getenv("AI_MODE")) == "mock":
         mock_evaluator = MockEvaluator()                  # offline, always scores 1
         evaluators.update({"semanticSimilarity": mock_evaluator, "llmJudge": mock_evaluator})
-        provider = MockProvider()                         # offline SUT
+        configured_provider = MockProvider()              # offline SUT
     else:
         if client is None and os.getenv("OPENAI_API_KEY"):
             from openai import AsyncOpenAI
@@ -77,27 +83,32 @@ def create_dependencies(database_url=None, client=None, ai_mode=None) -> Depende
                 "semanticSimilarity": SemanticSimilarityEvaluator(client, ...),
                 "llmJudge": LLMJudgeEvaluator(client, ...),
             })
-            provider = OpenAIProvider(client)
+            configured_provider = OpenAIProvider(client)
 
-    # 4. Connect everything and return it
+    # 4. Inject the collaborators into the two application services and return them
+    suites = SQLAlchemySuiteRepository(engine)
     return Dependencies(
-        suites=SQLAlchemySuiteRepository(engine),
-        runs=SQLAlchemyRunRepository(engine),
-        runner=EvalRunner(evaluators),
-        provider=provider,
+        catalog=TestCatalog(suites),
+        runs=RunService(suites, SQLAlchemyRunRepository(engine), EvalRunner(evaluators),
+                        provider if provider is not None else configured_provider),
     )
 ```
 
 The result is a `Dependencies` object, a simple container (a `@dataclass`) holding the
-four ready-to-use objects (the diagram shows the OpenAI configuration):
+two application services. Repositories, runner and provider are not in it: they are
+injected into the services and stay hidden from the callers. The diagram shows the
+OpenAI configuration:
 
 ```mermaid
 flowchart TD
     CD["create_dependencies()"] --> D["Dependencies"]
-    D --> S["suites: SQLAlchemySuiteRepository"]
-    D --> R["runs: SQLAlchemyRunRepository"]
-    D --> RU["runner: EvalRunner"]
-    D --> P["provider: OpenAIProvider | None"]
+    D --> TC["catalog: TestCatalog"]
+    D --> RS["runs: RunService"]
+    TC --> S["SQLAlchemySuiteRepository"]
+    RS --> S
+    RS --> R["SQLAlchemyRunRepository"]
+    RS --> RU["EvalRunner"]
+    RS --> P["OpenAIProvider | None"]
     S --> E[("engine (SQLite)")]
     R --> E
     RU --> EV["evaluators dict"]
@@ -111,18 +122,19 @@ flowchart TD
 
 Some things to notice:
 
-- **Shared objects.** Both repositories receive the *same* `engine`; the three OpenAI
-  classes receive the *same* `client`. Only the composition root can arrange this,
-  because only it sees all the objects.
+- **Shared objects.** Both repositories receive the *same* `engine`; both services
+  receive the *same* suite repository; the three OpenAI classes receive the *same*
+  `client`. Only the composition root can arrange this, because only it sees all the objects.
 - **Configuration in one place.** Environment variables (`DATABASE_URL`, `AI_MODE`,
   `OPENAI_API_KEY`, `OPENAI_EMBEDDING_MODEL`, `OPENAI_JUDGE_MODEL`) are read only here.
   Domain classes never read the environment.
 - **Optional features.** Without an API key the application still starts: only
-  `exactMatch` is available and `provider` is `None`. The web server checks it and
-  answers with a clear error when a run cannot be started.
-- **Typed by interface.** The fields of `Dependencies` use interfaces
-  (`SuiteRepository`, `RunRepository`, `ModelProvider`), not the SQLAlchemy or OpenAI
-  classes. The code that uses `Dependencies` therefore does not depend on those details.
+  `exactMatch` is available and the run service receives no provider. The service then
+  rejects runs with a clear error, which the web server turns into a 422.
+- **Typed by interface.** The fields of `Dependencies` use the service interfaces
+  (`ITestCatalog`, `IRunService`), and the services' constructors use the repository and
+  provider interfaces, never the SQLAlchemy or OpenAI classes. The code that uses
+  `Dependencies` therefore does not depend on those details.
 
 ## Example: replacing the AI services with mocks
 
@@ -138,8 +150,8 @@ The application talks to an AI service at two points: the **system under test** 
 | Exact match | `ExactMatchEvaluator` | `ExactMatchEvaluator` (unchanged) |
 
 This is the clearest demonstration of dependency injection in the project: the
-behavior of the whole application changes, yet `EvalRunner`, the routes and the
-repositories are untouched. Only the composition root chooses different objects.
+behavior of the whole application changes, yet `EvalRunner`, `RunService`, the routes and
+the repositories are untouched. Only the composition root chooses different objects.
 The mocks do not try to give realistic answers: they let you check the **flow** (create
 a suite, run it, store and read the report) without credentials or costs.
 
@@ -163,8 +175,14 @@ def create_app(dependencies: Dependencies | None = None) -> FastAPI:
   request (so importing the module does not open the database).
 - In **tests**, the test passes its own dependencies.
 
-Every route then uses `deps().suites`, `deps().runner`, … without knowing how they
-were built.
+Every route then calls `deps().catalog` or `deps().runs` without knowing how they were
+built. Code that does not use HTTP does the same:
+
+```python
+dependencies = create_dependencies()
+suite = dependencies.catalog.create_suite("Capitals")
+run = await dependencies.runs.run_suite(suite.id, "mock", "demo")
+```
 
 ## The payoff: testing with fakes
 
@@ -189,12 +207,11 @@ class Provider:                                # a fake ModelProvider
 
 
 def make_client(database_url):
-    dependencies = create_dependencies(database_url)   # a temporary test database
-    dependencies.provider = Provider()                 # inject the fake provider
-    return TestClient(create_app(dependencies))        # inject everything into the web app
+    # a temporary test database + the fake provider, injected into the web app
+    return TestClient(create_app(create_dependencies(database_url, provider=Provider())))
 ```
 
-With three lines the whole HTTP workflow is tested against a temporary database and a
+With one line the whole HTTP workflow is tested against a temporary database and a
 fake model: no API key, no costs, same result every time. Tests can also simply ask for
 the mocks: `create_dependencies(url, ai_mode="mock")`. Without dependency
 injection this would be impossible without modifying the production classes.

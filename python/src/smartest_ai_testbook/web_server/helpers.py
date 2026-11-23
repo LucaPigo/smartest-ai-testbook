@@ -1,9 +1,10 @@
-"""Helper functions used by the routes in app.py.
+"""HTTP helpers used by the routes in app.py.
 
-They fall into three groups:
+They only translate between HTTP and the domain; they hold no business rules:
+- turning domain outcomes into HTTP errors (422 for invalid input, 404 for missing items);
 - converting domain objects to JSON-ready dicts;
-- building domain objects from the request data;
-- finding stored objects, answering 404 when they do not exist.
+- converting request data to domain objects.
+Finding, validating and saving data is done by the application services.
 """
 
 import math
@@ -14,10 +15,9 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from smartest_ai_testbook.test_creation.expectation import Expectation
-from smartest_ai_testbook.test_creation.test_case import TestCaseBuilder
 
 
-# --- Error handling -----------------------------------------------------------
+# --- Domain outcomes -> HTTP errors ---------------------------------------------
 
 async def invalid_request(_request, error):
     """Answer 422 when the request body does not match the expected model.
@@ -31,6 +31,26 @@ async def invalid_request(_request, error):
         float: lambda value: value if math.isfinite(value) else str(value),
     })
     return JSONResponse(status_code=422, content=content)
+
+
+async def domain_error(_request, error):
+    """Answer 422 when a service rejects input that breaks a domain rule.
+
+    The domain does not know HTTP: it raises ValueError with a readable message.
+    Registered in app.py, this handler turns it into `{"detail": "<message>"}`.
+    """
+    return JSONResponse(status_code=422, content={"detail": str(error)})
+
+
+def or_404(result, detail):
+    """Return the result of a service, or answer 404 when the service found nothing (None).
+
+    Raising HTTPException inside a helper works like raising it in the route:
+    FastAPI stops the request and sends the error status to the client.
+    """
+    if result is None:
+        raise HTTPException(status_code=404, detail=detail)
+    return result
 
 
 # --- Domain objects -> JSON -----------------------------------------------------
@@ -63,52 +83,6 @@ def run_json(item):
 
 # --- Request data -> domain objects ---------------------------------------------
 
-def build_case(data, expectations, id=None):
-    """Build a test case with the domain builder.
-
-    `data` can be a request body or an existing test case: both have title,
-    prompt and variables. Pass `id` to keep the ID of an existing test case.
-    """
-    builder = TestCaseBuilder().set_title(data.title).set_prompt(data.prompt).set_variables(data.variables or {})
-    for expectation in expectations:
-        builder.add_expectation(expectation)
-    try:
-        return builder.build(id=id)
-    except ValueError as error:
-        # The domain rejects invalid data with ValueError: report it as 422.
-        raise HTTPException(status_code=422, detail=str(error)) from error
-
-
 def new_expectation(data, id=None):
     """Create an expectation from request data. Pass `id` to keep an existing ID."""
     return Expectation(data.name, data.evaluator_type, data.threshold, data.options, id=id)
-
-
-# --- Lookups ------------------------------------------------------------------
-# Raising HTTPException inside a helper works like raising it in the route:
-# FastAPI stops the request and sends the error status to the client.
-
-def find_suite(suites, suite_id):
-    suite = suites.get(suite_id)
-    if suite is None:
-        raise HTTPException(status_code=404, detail="Suite not found")
-    return suite
-
-
-def find_case(suites, case_id):
-    """Return (suite, index of the case in the suite, case)."""
-    for suite in suites.list():
-        for index, case in enumerate(suite.tests):
-            if case.id == case_id:
-                return suite, index, case
-    raise HTTPException(status_code=404, detail="Test case not found")
-
-
-def find_expectation(suites, expectation_id):
-    """Return (suite, case, index of the expectation in the case)."""
-    for suite in suites.list():
-        for case in suite.tests:
-            for index, expectation in enumerate(case.expectations):
-                if expectation.id == expectation_id:
-                    return suite, case, index
-    raise HTTPException(status_code=404, detail="Expectation not found")

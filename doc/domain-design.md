@@ -1,7 +1,7 @@
 # Minimal Class Diagram — MVP
 
 The domain has four logical subsystems: **test creation → execution → reporting**, plus independent **exporting**.
-They communicate through public contracts in the same application, without additional subsystem wrapper classes.
+They communicate through public contracts in the same application. In the Python implementation, one **application service** per persisted subsystem owns its use cases and saves through injected repositories (see [Application services](#application-services)).
 Only essential fields and operations are shown. The [requirements](./requirements.md) remain the reference.
 
 ## 1. Subsystems and public contracts
@@ -156,6 +156,56 @@ Concrete domain classes explicitly implement these contracts:
 - **Reporting:** `ReportGenerator` creates an `EvalReport` from the completed run. The report exposes the recorded results without aggregation. This subsystem knows no runner, builder or provider implementations.
 - **Exporting:** `JsonSuiteExporter` reads `ITestSuite` and its related `IEvalRun` objects and returns JSON containing the suite, tests, expectations, runs, results and scores. The caller retrieves the suite and its complete stored run history, which may be empty, and supplies them to `exportSuite`. Exporting is independent of execution and report generation and has no dependency on `EvalRunner` or `ReportGenerator`. The web interface handles downloading the returned JSON.
 
+### Application services
+
+Entities never save themselves. Each use case of the web workflow is an operation of an **application service**, which finds the domain objects through repositories, changes them through the domain contracts (builder, suite, runner) and saves the result. Services receive all their collaborators by dependency injection from the composition root.
+
+```mermaid
+classDiagram
+    direction LR
+    class ITestCatalog {
+        <<interface>>
+        +createSuite(name, description) ITestSuite
+        +addTestCase(suiteId, title, prompt, variables, expectations) ITestCase?
+        +updateTestCase(caseId, title, prompt, variables, expectations) ITestCase?
+        +updateExpectation(expectationId, expectation) Expectation?
+    }
+    class IRunService {
+        <<interface>>
+        +runSuite(suiteId, providerName, modelName) Promise~IEvalRun?~
+        +listRuns(suiteId) List~IEvalRun~?
+        +getRun(runId) IEvalRun?
+    }
+    class SuiteRepository {
+        <<interface>>
+        +save(suite)
+        +get(suiteId) ITestSuite?
+        +list() List~ITestSuite~
+        +delete(suiteId) Boolean
+    }
+    class RunRepository {
+        <<interface>>
+        +save(run)
+        +get(runId) IEvalRun?
+        +list(suiteId) List~IEvalRun~
+    }
+    ITestCatalog ..> SuiteRepository : finds and saves suites
+    ITestCatalog ..> ITestCaseBuilder : builds valid tests
+    IRunService ..> SuiteRepository : reads the suite
+    IRunService ..> ModelProvider : gets the configured model
+    IRunService ..> IEvalRunner : runs the suite
+    IRunService ..> RunRepository : saves the run
+```
+
+| Service | Implementation | Use cases | Rules it owns |
+|---|---|---|---|
+| `ITestCatalog` | `TestCatalog` | list, create, update and delete suites; list, add, read, update and delete test cases; list, add and update expectations | locating tests and expectations across suites; an updated test may keep, change or drop its expectations but not reuse IDs of other tests or repeat them; changing an expectation rebuilds and revalidates its test |
+| `IRunService` | `RunService` | start a run, list the runs of a suite, read a run | only the configured provider and a nonblank model name are accepted; a completed run is saved |
+
+The diagram shows only some `ITestCatalog` operations. Outcomes use no extra classes: an operation returns nothing (or `false` for a delete) when the requested item does not exist, and raises the domain's validation error for invalid input. The HTTP server translates these outcomes into status codes; any other caller can use the services directly.
+
+Repository contracts belong to the domain; their SQLite implementations belong to persistence. Reporting and exporting have no service because they read completed data and save nothing.
+
 ### AI integration points
 
 An AI service is involved at exactly two points:
@@ -234,21 +284,28 @@ Each expectation outcome retains its own score. A shared 0–1 scale does not ma
 
 ### Execution and reporting
 
-The application is the caller, for example an HTTP handler, not an additional domain class. It first prepares a suite through the creation contracts, selects one model for the run, then calls execution and reporting separately. Tests and their expectations execute sequentially; each test generates exactly one response and every check evaluates that same response.
+The caller, for example an HTTP handler, asks the run service to run a stored suite with a provider and model name. The service loads the suite, checks the provider, obtains the model, calls the runner and saves the completed run; reporting is called separately on that run. Tests and their expectations execute sequentially; each test generates exactly one response and every check evaluates that same response.
 
 ```mermaid
 sequenceDiagram
-    actor App as Application
-    participant Runner as EvalRunner
+    actor App as Caller (HTTP handler)
+    participant Service as RunService
+    participant Suites as SuiteRepository
     participant Provider as ModelProvider
+    participant Runner as EvalRunner
     participant Model
     participant Evaluator
+    participant Runs as RunRepository
     participant Generator as ReportGenerator
 
-    Note over App: Suite prepared through ITestCaseBuilder and ITestSuite
-    App->>Provider: getModel(modelName)
-    Provider-->>App: Model
-    App->>Runner: await run(suite, model)
+    Note over App: Suite prepared and saved through ITestCatalog
+    App->>Service: await runSuite(suiteId, providerName, modelName)
+    Service->>Suites: get(suiteId)
+    Suites-->>Service: ITestSuite or nothing (not found)
+    Note over Service: Reject an unconfigured provider or blank model name
+    Service->>Provider: getModel(modelName)
+    Provider-->>Service: Model
+    Service->>Runner: await run(suite, model)
     Note over Runner: Create EvalRun
     loop For each test in suite.tests
         Runner->>Model: await generateResponse(test.prompt, test.variables)
@@ -266,7 +323,9 @@ sequenceDiagram
         Note over Runner: Test passes only if execution and all expectations pass
         Note over Runner: run.addResult(result)
     end
-    Runner-->>App: IEvalRun
+    Runner-->>Service: IEvalRun
+    Service->>Runs: save(run)
+    Service-->>App: IEvalRun
     App->>Generator: generate(run)
     Note over Generator: Copy run metadata and results into EvalReport
     Generator-->>App: IEvalReport
@@ -357,9 +416,9 @@ classDiagram
 
 ## Implementation boundaries
 
-Every TypeScript class and every Python domain class must explicitly implement the public contracts required by [AGENTS.md](../AGENTS.md). The table lists the core contracts; strategy and adapter contracts are shown in the pattern view. Plain records are data types. Both languages implement this same model.
+Every TypeScript class and every Python domain class must explicitly implement the public contracts required by [AGENTS.md](../AGENTS.md). The table lists the core contracts; strategy and adapter contracts are shown in the pattern view, application services in their own section. Plain records are data types. Both languages implement this same model, except for the differences listed below.
 
-TypeScript and Python implement the same test configuration, three evaluation strategies, mock SUT and mock evaluator, fixed execution policy and reporting responsibilities. Deterministic providers used by tests are test support. The Python application also provides SQLite persistence and the suite/test/run HTTP workflow; the TypeScript HTTP server currently provides only `GET /health`. Generated transport types do not imply HTTP endpoint parity. See [web architecture](./web-architecture.md) for these supporting-code boundaries and verification scope.
+TypeScript and Python implement the same test configuration, three evaluation strategies, mock SUT and mock evaluator, fixed execution policy and reporting responsibilities. Deterministic providers used by tests are test support. The Python application also provides SQLite persistence and the suite/test/run HTTP workflow; the TypeScript HTTP server currently provides only `GET /health`. Generated transport types do not imply HTTP endpoint parity. The application services (`TestCatalog`, `RunService`) and the repository contracts exist only in Python: by decision of the project owner they were not added to TypeScript, which has no persistence or HTTP workflow, so this is an accepted exception to the parity rule. See [web architecture](./web-architecture.md) for these supporting-code boundaries and verification scope.
 
 The SQLite loader keeps existing definitions readable by copying legacy shared reference answers and rubrics into the corresponding expectation options when a local criterion is absent. Local options take precedence. Reads do not rewrite the database; the next normal save writes only the new definition shape. Existing run rows and report snapshots are preserved.
 
