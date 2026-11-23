@@ -1,5 +1,9 @@
 # API generation
 
+For an introduction to OpenAPI, the UI-driven design of the contract and code
+generation, read the [lesson in `api/doc/`](../api/doc/README.md). This page is the
+operational reference.
+
 `api/openapi.yaml` is the canonical HTTP contract. Generated transport code is
 separate from handwritten server code and is committed to version control.
 Change the contract and regenerate instead of editing generated artifacts.

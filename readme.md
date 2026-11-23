@@ -51,6 +51,7 @@ Check that the next step, required input, score scale and outcome, and provider 
 - [requirements.md](./doc/requirements.md): MVP requirements and boundaries;
 - [test-case-examples.md](./doc/test-case-examples.md): tests, evaluators, and a sample report.
 - [glossary.md](./doc/glossary.md): definitions of the project's main terms;
+- [api/doc](./api/doc/README.md): lesson on the OpenAPI standard, the UI-driven (BFF) design of the HTTP contract and code generation;
 - [python/doc](./python/doc/README.md): lesson on the architecture of the Python implementation (domain independence, dependency injection, design patterns, order of execution), with appendices on FastAPI and SQLAlchemy.
 
 ## Run the Python application
